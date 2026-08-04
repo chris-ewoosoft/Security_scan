@@ -5270,7 +5270,7 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget": {},
+    "C:\\Users\\Chris\\.nuget\\packages\\": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
@@ -5279,7 +5279,7 @@
       "projectUniqueName": "D:\\Security Portal\\src\\shared\\SecurityPortal.Infrastructure\\SecurityPortal.Infrastructure.csproj",
       "projectName": "SecurityPortal.Infrastructure",
       "projectPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Infrastructure\\SecurityPortal.Infrastructure.csproj",
-      "packagesPath": "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget",
+      "packagesPath": "C:\\Users\\Chris\\.nuget\\packages\\",
       "outputPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Infrastructure\\obj\\",
       "projectStyle": "PackageReference",
       "centralPackageVersionsManagementEnabled": true,

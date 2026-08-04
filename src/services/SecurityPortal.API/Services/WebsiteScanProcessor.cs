@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using SecurityPortal.Application.Common.Interfaces;
 using SecurityPortal.Application.Features.Scans.DTOs;
+using SecurityPortal.Application.Features.Scans.Localization;
 using SecurityPortal.Domain.Entities;
 
 namespace SecurityPortal.API.Services;
@@ -13,6 +14,7 @@ namespace SecurityPortal.API.Services;
 public sealed class WebsiteScanProcessor(
     IServiceScopeFactory scopeFactory,
     IHttpClientFactory httpClientFactory,
+    ScanCancellationRegistry cancelRegistry,
     ILogger<WebsiteScanProcessor> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -37,47 +39,108 @@ public sealed class WebsiteScanProcessor(
         }
     }
 
-    private async Task ProcessBatchAsync(CancellationToken cancellationToken)
+    private async Task ProcessBatchAsync(CancellationToken stoppingToken)
     {
         using var scope = scopeFactory.CreateScope();
         var scans = scope.ServiceProvider.GetRequiredService<IWebsiteScanRepository>();
         var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var db = scope.ServiceProvider.GetRequiredService<SecurityPortal.Infrastructure.Persistence.ApplicationDbContext>();
 
-        var queued = await scans.GetQueuedAsync(5, cancellationToken);
+        var queued = await scans.GetQueuedAsync(5, stoppingToken);
         if (queued.Count == 0) return;
 
         var client = httpClientFactory.CreateClient("WebsiteScanner");
 
         foreach (var scan in queued)
         {
+            if (await IsCancelledAsync(scan.Id, stoppingToken))
+            {
+                db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                continue;
+            }
+
+            var scanAbort = cancelRegistry.Register(scan.Id);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, scanAbort);
+            var scanToken = linked.Token;
+
             scan.MarkRunning();
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            await unitOfWork.SaveChangesAsync(stoppingToken);
 
             try
             {
                 var config = scan.GetConfiguration();
-                var result = await AnalyzeAsync(client, scan.TargetUrl, config, cancellationToken);
+                var result = await AnalyzeAsync(client, scan.Id, scan.TargetUrl, config, scanToken);
+
+                // Drop tracked entity so we cannot overwrite a concurrent Cancelled row.
+                db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                var fresh = await scans.GetByIdAsync(scan.Id, stoppingToken);
+                if (fresh is null || fresh.Status == ScanStatus.Cancelled)
+                    continue;
+
+                if (fresh.Status != ScanStatus.Running)
+                    continue;
+
                 var findingsJson = JsonSerializer.Serialize(result.Report, JsonOptions);
-                scan.MarkCompleted(
+                fresh.MarkCompleted(
                     result.Summary,
                     result.StatusCode,
                     result.ResponseTimeMs,
                     result.HasHttps,
                     result.ServerHeader,
                     findingsJson);
+
+                // Final cancel race: if stop landed after analyze, drop local complete.
+                if (await IsCancelledAsync(scan.Id, stoppingToken))
+                {
+                    db.Entry(fresh).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                    continue;
+                }
+
+                await unitOfWork.SaveChangesAsync(stoppingToken);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (scanAbort.IsCancellationRequested && !stoppingToken.IsCancellationRequested)
+            {
+                logger.LogInformation("Scan {ScanId} cancelled for {Url}", scan.Id, scan.TargetUrl);
+                db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                // Ensure DB row is Cancelled even if abort raced ahead of ExecuteUpdate.
+                await scans.TryCancelAsync(scan.Id, "Scan cancelled by user.", CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogWarning(ex, "Scan {ScanId} failed for {Url}", scan.Id, scan.TargetUrl);
-                scan.MarkFailed(ex.Message);
+                db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                var fresh = await scans.GetByIdAsync(scan.Id, stoppingToken);
+                if (fresh is not null && fresh.Status == ScanStatus.Running)
+                {
+                    fresh.MarkFailed(ex.Message);
+                    await unitOfWork.SaveChangesAsync(stoppingToken);
+                }
             }
-
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            finally
+            {
+                cancelRegistry.Unregister(scan.Id);
+            }
         }
     }
 
-    private static async Task<AnalysisResult> AnalyzeAsync(
+    private async Task<bool> IsCancelledAsync(Guid scanId, CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var scans = scope.ServiceProvider.GetRequiredService<IWebsiteScanRepository>();
+        var current = await scans.GetByIdAsync(scanId, cancellationToken);
+        return current?.Status == ScanStatus.Cancelled;
+    }
+
+    private async Task EnsureNotCancelledAsync(Guid scanId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (await IsCancelledAsync(scanId, cancellationToken))
+            throw new OperationCanceledException("Scan cancelled by user.");
+    }
+
+    private async Task<AnalysisResult> AnalyzeAsync(
         HttpClient client,
+        Guid scanId,
         string targetUrl,
         ScanConfiguration config,
         CancellationToken cancellationToken)
@@ -107,6 +170,8 @@ public sealed class WebsiteScanProcessor(
         var findings = new List<ScanFindingDto>();
         foreach (var check in selectedChecks)
         {
+            await EnsureNotCancelledAsync(scanId, cancellationToken);
+
             var tools = check.Tools.Where(t => config.Tools.Contains(t, StringComparer.OrdinalIgnoreCase)).ToList();
             if (tools.Count == 0) tools = check.Tools.ToList();
 
@@ -132,11 +197,15 @@ public sealed class WebsiteScanProcessor(
             findings.AddRange(batch);
         }
 
+        await EnsureNotCancelledAsync(scanId, cancellationToken);
+
         var riskScore = Score(findings);
         var riskLevel = riskScore >= 70 ? "High" : riskScore >= 40 ? "Medium" : "Low";
         var reportDef = ScanCatalog.Reports.First(r => r.Id.Equals(config.ReportType, StringComparison.OrdinalIgnoreCase));
 
-        var executive = BuildExecutiveSummary(targetUrl, findings, riskLevel, config.ReportType);
+        var executive = ScanI18n.BuildExecutiveSummary(
+            targetUrl, riskLevel, findings.Count(f => f.Severity == "High"),
+            findings.Count(f => f.Severity == "Medium"), config.ReportType, "en");
         var report = new ScanReportPayloadDto(
             config.ReportType,
             reportDef.Name,
@@ -163,40 +232,13 @@ public sealed class WebsiteScanProcessor(
     private static IEnumerable<ScanFindingDto> EvaluateReachability(
         ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, HttpResponseMessage response, long ms)
     {
-        var code = (int)response.StatusCode;
-        if (code >= 500)
-        {
-            yield return Finding(check, tools, "High", "Máy chủ trả lỗi 5xx",
-                ObservedImpact(
-                    $"GET {targetUrl} → HTTP {code} trong {ms} ms.",
-                    "Lỗi 5xx cho thấy ứng dụng/server không ổn định hoặc lỗi nội bộ — ảnh hưởng availability và có thể lộ stack trace."),
-                $"method=GET; url={targetUrl}; status={code}; latency_ms={ms}",
-                "Kiểm tra log server, health check và error handling; tránh trả stack trace ra client.",
-                Steps(
-                    $"curl -sI \"{targetUrl}\"",
-                    $"Xác nhận status line là HTTP {code} (hoặc 5xx tương đương).",
-                    "Thử lại vài lần để phân biệt lỗi tạm thời vs lỗi cố định."));
-        }
-        else if (code >= 400)
-        {
-            yield return Finding(check, tools, "Medium", "Máy chủ trả lỗi 4xx",
-                ObservedImpact(
-                    $"GET {targetUrl} → HTTP {code} trong {ms} ms.",
-                    "4xx trên URL công khai có thể do path sai, auth, hoặc WAF chặn — cần xác nhận đây có phải entry point đúng không."),
-                $"method=GET; url={targetUrl}; status={code}; latency_ms={ms}",
-                "Xác nhận public URL/path và access control; kiểm tra redirect về trang hợp lệ.",
-                Steps(
-                    $"curl -sI \"{targetUrl}\"",
-                    $"Ghi nhận status {code} và các header Location (nếu có).",
-                    "So sánh với URL trang chủ/login mà người dùng thực tế truy cập."));
-        }
-        else
-        {
-            yield return Finding(check, tools, "Info", "Website reachable",
-                $"Host phản hồi HTTP {code} trong {ms} ms.",
-                $"status={code}; latency={ms}ms",
-                "Giữ monitoring availability định kỳ.");
-        }
+        var status = (int)response.StatusCode;
+        var code = status >= 500 ? "reachability.5xx" : status >= 400 ? "reachability.4xx" : "reachability.ok";
+        var severity = status >= 500 ? "High" : status >= 400 ? "Medium" : "Info";
+        yield return Finding(check, tools, severity, code, P(
+            ("targetUrl", targetUrl), ("status", status.ToString()), ("observed", $"GET {targetUrl} returned HTTP {status} in {ms} ms."),
+            ("impact", status >= 500 ? "The service may be unavailable or expose internal errors." : status >= 400 ? "The public entry point may be incorrect or blocked." : "")),
+            $"method=GET; url={targetUrl}; status={status}; latency_ms={ms}");
     }
 
     private static IEnumerable<ScanFindingDto> EvaluateHttps(
@@ -207,23 +249,13 @@ public sealed class WebsiteScanProcessor(
             var httpsGuess = url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                 ? "https://" + url["http://".Length..]
                 : url;
-            yield return Finding(check, tools, "High", "Không dùng HTTPS",
-                ObservedImpact(
-                    $"Target đang dùng HTTP thuần: {url}.",
-                    "Traffic (cookie, token, form) có thể bị nghe lén/sửa trên đường truyền (MITM)."),
-                $"scheme=http; url={url}",
-                "Bắt buộc HTTPS, redirect HTTP→HTTPS, và cân nhắc HSTS.",
-                Steps(
-                    $"curl -sI \"{url}\"",
-                    "Xác nhận không có redirect sang HTTPS (hoặc chỉ phục vụ HTTP).",
-                    $"Thử \"{httpsGuess}\" — nếu HTTPS hoạt động, cấu hình redirect từ HTTP.",
-                    "Mở DevTools → Security để xem connection không được mã hóa."));
+            yield return Finding(check, tools, "High", "https.missing", P(
+                ("targetUrl", url), ("httpsUrl", httpsGuess), ("observed", $"The target uses unencrypted HTTP: {url}."),
+                ("impact", "Cookies, tokens, and forms can be intercepted or modified in transit.")), $"scheme=http; url={url}");
         }
         else
         {
-            yield return Finding(check, tools, "Info", "HTTPS được bật",
-                "URL mục tiêu sử dụng HTTPS.", url,
-                "Tiếp tục duy trì chứng chỉ hợp lệ và HSTS.");
+            yield return Finding(check, tools, "Info", "https.ok", P(("targetUrl", url)), url);
         }
     }
 
@@ -262,27 +294,16 @@ public sealed class WebsiteScanProcessor(
         {
             if (!headers.ContainsKey(header))
             {
-                var isRisk = severity is "High" or "Medium";
-                yield return Finding(check, tools, severity, $"Thiếu header {header}",
-                    isRisk
-                        ? ObservedImpact($"Response GET {targetUrl} không có header {header}.", impact)
-                        : $"Response không có {header}.",
-                    $"missing_header={header}; expected≈{expectation}",
-                    recommendation,
-                    isRisk
-                        ? Steps(
-                            $"curl -sI \"{targetUrl}\"",
-                            $"Trong output, xác nhận không có dòng '{header}: …'.",
-                            $"Sau khi fix, lặp lại lệnh và đối chiếu với kỳ vọng: {expectation}.")
-                        : null);
+                yield return Finding(check, tools, severity, "header.missing", P(
+                    ("header", header), ("targetUrl", targetUrl), ("expectation", expectation), ("recommendation", recommendation),
+                    ("observed", $"GET response does not include {header}."), ("impact", impact)),
+                    $"missing_header={header}; expected={expectation}");
             }
         }
 
         if (required.All(r => headers.ContainsKey(r.Header)))
         {
-            yield return Finding(check, tools, "Info", "Security headers cơ bản đã có",
-                "Các header bảo mật chính đều hiện diện.", null,
-                "Rà soát giá trị header định kỳ theo baseline OWASP.");
+            yield return Finding(check, tools, "Info", "header.ok", P(("targetUrl", targetUrl)), null);
         }
     }
 
@@ -291,30 +312,19 @@ public sealed class WebsiteScanProcessor(
     {
         if (!string.IsNullOrWhiteSpace(server))
         {
-            yield return Finding(check, tools, "Low", "Lộ Server header",
-                "Response tiết lộ thông tin server.", $"Server: {server}",
-                "Ẩn hoặc làm mờ Server header ở reverse proxy.");
+            yield return Finding(check, tools, "Low", "fingerprint.server", P(
+                ("server", server), ("impact", "Server information helps attackers fingerprint the stack.")), $"Server: {server}");
         }
 
         if (!string.IsNullOrWhiteSpace(poweredBy))
         {
-            yield return Finding(check, tools, "Medium", "Lộ X-Powered-By",
-                ObservedImpact(
-                    $"Header X-Powered-By = '{poweredBy}' trên {targetUrl}.",
-                    "Attacker dùng thông tin framework/runtime để chọn CVE và payload phù hợp."),
-                $"X-Powered-By: {poweredBy}",
-                "Gỡ header X-Powered-By trên ứng dụng / reverse proxy.",
-                Steps(
-                    $"curl -sI \"{targetUrl}\"",
-                    "Tìm dòng X-Powered-By và ghi nhận giá trị.",
-                    "Sau khi tắt header, lặp lại curl và xác nhận đã biến mất."));
+            yield return Finding(check, tools, "Medium", "fingerprint.powered_by", P(
+                ("targetUrl", targetUrl), ("observed", $"X-Powered-By: {poweredBy}"), ("impact", "Framework information can help target CVEs.")), $"X-Powered-By: {poweredBy}");
         }
 
         if (string.IsNullOrWhiteSpace(server) && string.IsNullOrWhiteSpace(poweredBy))
         {
-            yield return Finding(check, tools, "Info", "Fingerprint hạn chế",
-                "Không thấy Server/X-Powered-By rõ ràng.", null,
-                "Tiếp tục giảm fingerprint bề mặt tấn công.");
+            yield return Finding(check, tools, "Info", "fingerprint.ok", P(), null);
         }
     }
 
@@ -323,9 +333,7 @@ public sealed class WebsiteScanProcessor(
     {
         if (string.IsNullOrWhiteSpace(setCookie))
         {
-            yield return Finding(check, tools, "Info", "Không có Set-Cookie",
-                "Response không set cookie ở trang đích.", null,
-                "Không có hành động bắt buộc.");
+            yield return Finding(check, tools, "Info", "cookie.none", P(("targetUrl", targetUrl)), null);
             yield break;
         }
 
@@ -334,44 +342,20 @@ public sealed class WebsiteScanProcessor(
 
         if (hasHttps && !lower.Contains("secure"))
         {
-            yield return Finding(check, tools, "High", "Cookie thiếu Secure",
-                ObservedImpact(
-                    "Ít nhất một Set-Cookie trên HTTPS không có cờ Secure.",
-                    "Cookie phiên có thể bị gửi qua HTTP nếu user/attacker ép downgrade — lộ session."),
-                cookieEvidence,
-                "Thêm Secure cho mọi cookie phiên/authentication.",
-                Steps(
-                    $"curl -sI \"{targetUrl}\"",
-                    "Tìm header Set-Cookie; xác nhận thiếu thuộc tính Secure.",
-                    "DevTools → Application → Cookies: cột Secure phải được tick sau khi fix."));
+            yield return Finding(check, tools, "High", "cookie.secure", P(
+                ("targetUrl", targetUrl), ("observed", "At least one HTTPS Set-Cookie lacks Secure."), ("impact", "A session cookie could be exposed after an HTTP downgrade.")), cookieEvidence);
         }
 
         if (!lower.Contains("httponly"))
         {
-            yield return Finding(check, tools, "Medium", "Cookie thiếu HttpOnly",
-                ObservedImpact(
-                    "Ít nhất một Set-Cookie không có cờ HttpOnly.",
-                    "Script XSS trên trang có thể đọc cookie và đánh cắp phiên."),
-                cookieEvidence,
-                "Thêm HttpOnly cho cookie phiên (không cần JS đọc).",
-                Steps(
-                    $"curl -sI \"{targetUrl}\"",
-                    "Xác nhận Set-Cookie thiếu HttpOnly.",
-                    "DevTools → Application → Cookies: cột HttpOnly phải được bật sau khi fix."));
+            yield return Finding(check, tools, "Medium", "cookie.httponly", P(
+                ("targetUrl", targetUrl), ("observed", "At least one Set-Cookie lacks HttpOnly."), ("impact", "XSS could read and steal the session cookie.")), cookieEvidence);
         }
 
         if (!lower.Contains("samesite"))
         {
-            yield return Finding(check, tools, "Medium", "Cookie thiếu SameSite",
-                ObservedImpact(
-                    "Ít nhất một Set-Cookie không khai báo SameSite.",
-                    "Tăng nguy cơ CSRF khi cookie được gửi kèm cross-site request."),
-                cookieEvidence,
-                "Thêm SameSite=Lax hoặc Strict tùy use-case (None chỉ khi có Secure + nhu cầu cross-site).",
-                Steps(
-                    $"curl -sI \"{targetUrl}\"",
-                    "Xác nhận Set-Cookie không có SameSite=…",
-                    "DevTools → Application → Cookies: kiểm tra cột SameSite sau khi cấu hình."));
+            yield return Finding(check, tools, "Medium", "cookie.samesite", P(
+                ("targetUrl", targetUrl), ("observed", "At least one Set-Cookie lacks SameSite."), ("impact", "Cross-site requests may increase CSRF risk.")), cookieEvidence);
         }
     }
 
@@ -380,31 +364,19 @@ public sealed class WebsiteScanProcessor(
     {
         if (string.IsNullOrWhiteSpace(corsOrigin))
         {
-            yield return Finding(check, tools, "Info", "Không thấy ACAO trên response",
-                "Không có Access-Control-Allow-Origin trong response GET.", null,
-                "Nếu API dùng CORS, kiểm tra preflight riêng.");
+            yield return Finding(check, tools, "Info", "cors.none", P(("targetUrl", targetUrl)), null);
             yield break;
         }
 
         if (corsOrigin.Trim() == "*")
         {
-            yield return Finding(check, tools, "High", "CORS mở (*)",
-                ObservedImpact(
-                    $"Access-Control-Allow-Origin: * trên response của {targetUrl}.",
-                    "Mọi website độc hại có thể đọc response từ origin này bằng fetch/XHR (đặc biệt nguy hiểm với API có dữ liệu nhạy cảm)."),
-                $"Access-Control-Allow-Origin: {corsOrigin}",
-                "Thu hẹp allowlist origin; không dùng * với credentialed requests (cookies/Authorization).",
-                Steps(
-                    $"curl -sI -H \"Origin: https://evil.example\" \"{targetUrl}\"",
-                    "Xác nhận response vẫn có Access-Control-Allow-Origin: * (hoặc echo origin).",
-                    "Trong DevTools Console trên trang khác: fetch(target, {mode:'cors'}).then(r=>r.text()) — nếu đọc được body thì tái tạo thành công.",
-                    "Sau khi fix, cùng lệnh curl phải không còn * / không reflect origin lạ."));
+            yield return Finding(check, tools, "High", "cors.wildcard", P(
+                ("targetUrl", targetUrl), ("observed", $"Access-Control-Allow-Origin: {corsOrigin}"),
+                ("impact", "Any website may be able to read responses from this origin.")), $"Access-Control-Allow-Origin: {corsOrigin}");
         }
         else
         {
-            yield return Finding(check, tools, "Info", "CORS có giới hạn origin",
-                "Access-Control-Allow-Origin không phải wildcard.", $"ACAO: {corsOrigin}",
-                "Rà soát danh sách origin theo môi trường.");
+            yield return Finding(check, tools, "Info", "cors.ok", P(("origin", corsOrigin)), $"Access-Control-Allow-Origin: {corsOrigin}");
         }
     }
 
@@ -416,16 +388,9 @@ public sealed class WebsiteScanProcessor(
         {
             if (headers.TryGetValue(key, out var value))
             {
-                yield return Finding(check, tools, "Medium", $"Lộ header {key}",
-                    ObservedImpact(
-                        $"Response có {key}: {value}.",
-                        "Thông tin phiên bản/stack hỗ trợ attacker chọn CVE và kỹ thuật tấn công chính xác hơn."),
-                    $"{key}: {value}",
-                    $"Loại bỏ hoặc hạn chế {key} ở web server / app middleware.",
-                    Steps(
-                        $"curl -sI \"{targetUrl}\"",
-                        $"Tìm dòng '{key}: {value}'.",
-                        "Sau khi gỡ header, lặp lại curl và xác nhận đã biến mất."));
+                yield return Finding(check, tools, "Medium", "disclosure.header", P(
+                    ("key", key), ("value", value), ("targetUrl", targetUrl),
+                    ("impact", "Version and stack information can help attackers select targeted exploits.")), $"{key}: {value}");
             }
         }
 
@@ -435,9 +400,7 @@ public sealed class WebsiteScanProcessor(
             yield break;
         }
 
-        yield return Finding(check, tools, "Info", "Không phát hiện disclosure rõ",
-            "Không thấy các header nhạy cảm phổ biến.", null,
-            "Tiếp tục hardening response headers.");
+        yield return Finding(check, tools, "Info", "disclosure.ok", P(), null);
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluatePortScanAsync(
@@ -469,30 +432,16 @@ public sealed class WebsiteScanProcessor(
             var risky = open.Where(p => p is 21 or 23 or 445 or 3306 or 3389 or 5432 or 6379).ToList();
             return
             [
-                Finding(check, tools, "Medium",
-                    $"Phát hiện {open.Count} cổng mở (probe nhanh)",
-                    ObservedImpact(
-                        $"TCP connect thành công tới {host} trên: {string.Join(", ", open)}.",
-                        risky.Count > 0
-                            ? $"Một số cổng nhạy cảm có thể lộ dịch vụ quản trị/DB ({string.Join(", ", risky)}) — tăng bề mặt tấn công."
-                            : "Cổng mở làm tăng bề mặt quét/tấn công; cần xác nhận chỉ dịch vụ cần thiết được expose."),
-                    $"host={host}; open={string.Join(',', open)}; ports_tested={ports.Length}",
-                    "Chỉ mở cổng cần thiết trên firewall/NSG; gắn Naabu trên worker cho full port scan.",
-                    Steps(
-                        $"Test-NetConnection {host} -Port {open[0]}   # PowerShell",
-                        $"hoặc: nc -vz {host} {string.Join(' ', open.Take(5))}",
-                        "Đối chiếu danh sách open với inventory dịch vụ được phép public.",
-                        "Sau khi đóng port, lặp lại probe và xác nhận timeout/refused."))
+                Finding(check, tools, "Medium", "port.open", P(
+                    ("host", host), ("port", open[0].ToString()), ("observed", $"TCP connections succeeded to {host} on {string.Join(", ", open)}."),
+                    ("impact", risky.Count > 0 ? $"Sensitive management or database ports are exposed: {string.Join(", ", risky)}." : "Open ports increase the attack surface.")),
+                    $"host={host}; open={string.Join(',', open)}; ports_tested={ports.Length}")
             ];
         }
 
         return
         [
-            Finding(check, tools, "Info",
-                "Không thấy cổng phổ biến mở (probe nhanh)",
-                "Kết quả từ TCP probe nội bộ. Để quét toàn diện hãy chạy Naabu trên worker.",
-                $"host={host}; ports_tested={ports.Length}",
-                "Chỉ mở cổng cần thiết; gắn runner Naabu cho full port scan.")
+            Finding(check, tools, "Info", "port.none", P(("host", host)), $"host={host}; ports_tested={ports.Length}")
         ];
     }
 
@@ -546,28 +495,17 @@ public sealed class WebsiteScanProcessor(
             var sample = found[0];
             return
             [
-                Finding(check, tools, "Medium",
-                    $"Directory probe: {found.Count} path phản hồi",
-                    ObservedImpact(
-                        $"Wordlist ngắn phát hiện {found.Count} path (đã lọc soft-404/SPA): {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}.",
-                        "Path admin/backup/API lộ diện giúp attacker tập trung brute-force hoặc khai thác panel."),
-                    string.Join("; ", found.Select(f => $"{f.Url} → {f.Code} [{f.Note}]")),
-                    "Ẩn/ bảo vệ panel admin (IP allowlist, SSO); tắt directory listing; gắn Feroxbuster/FFUF cho discovery sâu.",
-                    Steps(
-                        $"curl -sI \"{sample.Url}\"",
-                        $"Xác nhận status {sample.Code} và nội dung không phải trang HTML fallback.",
-                        "Mở URL trên browser (nếu 200) hoặc ghi nhận trang login/403.",
-                        "Sau khi hạn chế truy cập, lặp lại curl — kỳ vọng 404 hoặc chặn bởi WAF."))
+                Finding(check, tools, "Medium", "directory.found", P(
+                    ("url", sample.Url), ("status", sample.Code.ToString()),
+                    ("observed", $"The built-in wordlist found {found.Count} paths: {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}."),
+                    ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
+                    string.Join("; ", found.Select(f => $"{f.Url} -> {f.Code} [{f.Note}]")))
             ];
         }
 
         return
         [
-            Finding(check, tools, "Info",
-                "Directory probe: không thấy path phổ biến",
-                "Wordlist ngắn built-in (đã loại soft-404). Full discovery cần Feroxbuster/FFUF trên worker.",
-                null,
-                "Ẩn/ bảo vệ panel admin; gắn Feroxbuster hoặc FFUF cho discovery sâu.")
+            Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)), null)
         ];
     }
 
@@ -619,28 +557,18 @@ public sealed class WebsiteScanProcessor(
             var sample = hits[0];
             return
             [
-                Finding(check, tools, "High", "Phát hiện file/path nhạy cảm có thể truy cập",
-                    ObservedImpact(
-                        $"Các path trả HTTP 2xx và đã xác thực nội dung (không phải soft-404/SPA): {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}.",
-                        "File cấu hình/backup/source có thể chứa secret, credential hoặc lộ cấu trúc hệ thống."),
-                    string.Join("; ", hits.Select(h => $"{h.Url} → {h.Code}; {h.EvidenceNote}")),
-                    "Gỡ file nhạy cảm khỏi web root ngay; chặn bằng server/WAF rules; rotate secret nếu đã lộ; chạy Nuclei định kỳ.",
-                    Steps(
-                        $"curl -sI \"{sample.Url}\"",
-                        $"Xác nhận HTTP {sample.Code} và Content-Type phù hợp file thật (không phải text/html trang chủ).",
-                        $"curl -s \"{sample.Url}\" | head  # đối chiếu nội dung có marker đặc trưng (cẩn thận secret)",
-                        "Sau khi gỡ/chặn: cùng URL phải trả 404/403 (không còn soft-404 HTML)."))
+                Finding(check, tools, "High", "sensitive.found", P(
+                    ("url", sample.Url), ("status", sample.Code.ToString()),
+                    ("observed", $"Validated sensitive paths returned HTTP 2xx: {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}."),
+                    ("impact", "Configuration, backup, or source files may expose secrets and system details.")),
+                    string.Join("; ", hits.Select(h => $"{h.Url} -> {h.Code}; {h.EvidenceNote}")))
             ];
         }
 
         return
         [
-            Finding(check, tools, "Info", "Không thấy sensitive path phổ biến (probe ngắn)",
-                "Đã lọc soft-404/SPA fallback (HTTP 200 giả). Chưa phát hiện file trong wordlist cơ bản sau khi xác thực nội dung.",
-                baseline is null
-                    ? null
-                    : $"baseline_status={baseline.StatusCode}; baseline_ctype={baseline.ContentType ?? "—"}",
-                "Giữ Nuclei trong pipeline CI/CD cho scan sâu.")
+            Finding(check, tools, "Info", "sensitive.none", P(("targetUrl", targetUrl)),
+                baseline is null ? null : $"baseline_status={baseline.StatusCode}; baseline_ctype={baseline.ContentType ?? "unknown"}")
         ];
     }
 
@@ -787,10 +715,7 @@ public sealed class WebsiteScanProcessor(
     private static IEnumerable<ScanFindingDto> EvaluateVulnerabilityPlaceholder(
         ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl)
     {
-        yield return Finding(check, tools, "Info", "Vulnerability Scan đã chọn (Nuclei)",
-            "Module này yêu cầu runner Nuclei với template pack. Hiện portal ghi nhận cấu hình để worker thực thi.",
-            $"target={targetUrl}; tool=nuclei",
-            "Triển khai SecurityPortal.Worker gắn Nuclei (CVE + misconfig templates).");
+        yield return Finding(check, tools, "Info", "vuln.placeholder", P(("targetUrl", targetUrl)), $"target={targetUrl}; tool=nuclei");
     }
 
     private static IEnumerable<ScanFindingDto> EvaluateTechnology(
@@ -812,19 +737,14 @@ public sealed class WebsiteScanProcessor(
             tech.Add("Drupal");
 
         yield return Finding(check, tools, tech.Count > 0 ? "Low" : "Info",
-            tech.Count > 0 ? "Technology signals phát hiện" : "Ít tín hiệu technology từ header",
-            "Suy luận từ header (built-in). WhatWeb/Wappalyzer cho kết quả đầy đủ hơn.",
-            tech.Count > 0 ? string.Join("; ", tech) : null,
-            "Giảm fingerprint; gắn WhatWeb/Wappalyzer trên worker để detect sâu.");
+            tech.Count > 0 ? "tech.found" : "tech.none",
+            P(("tech", string.Join("; ", tech))), tech.Count > 0 ? string.Join("; ", tech) : null);
     }
 
     private static IEnumerable<ScanFindingDto> EvaluateScreenshotPlaceholder(
         ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl)
     {
-        yield return Finding(check, tools, "Info", "Screenshot module đã chọn (Gowitness)",
-            "Cần runner Gowitness + lưu ảnh lên MinIO. Portal đã ghi nhận yêu cầu trong cấu hình scan.",
-            $"target={targetUrl}; tool=gowitness",
-            "Triển khai worker Screenshot (Gowitness) và gắn MinIO bucket evidence.");
+        yield return Finding(check, tools, "Info", "screenshot.placeholder", P(("targetUrl", targetUrl)), $"target={targetUrl}; tool=gowitness");
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDnsAsync(
@@ -837,27 +757,16 @@ public sealed class WebsiteScanProcessor(
             var evidence = string.Join(", ", addresses.Select(a => a.ToString()));
             return
             [
-                Finding(check, tools, "Info", "DNS resolve thành công",
-                    "Resolve A/AAAA qua DNS hệ thống. dnsx bổ sung CNAME/NS/MX/TXT và wildcard detection.",
-                    $"host={host}; addrs={evidence}",
-                    "Giám sát thay đổi DNS; gắn dnsx cho kiểm tra DNS security đầy đủ.")
+                Finding(check, tools, "Info", "dns.ok", P(("host", host), ("addresses", evidence)), $"host={host}; addrs={evidence}")
             ];
         }
         catch (Exception ex)
         {
             return
             [
-                Finding(check, tools, "High", "DNS resolve thất bại",
-                    ObservedImpact(
-                        $"Không resolve được host '{host}' cho {targetUrl}.",
-                        "Target không tới được qua DNS — scan/khách hàng đều thất bại; có thể lỗi cấu hình hoặc nameserver."),
-                    $"host={host}; error={ex.Message}",
-                    "Kiểm tra DNS record và nameserver; chạy dnsx để chẩn đoán.",
-                    Steps(
-                        $"nslookup {host}",
-                        $"Resolve-DnsName {host}   # PowerShell",
-                        "Đối chiếu lỗi với registrar/DNS zone (A/AAAA thiếu hoặc nameserver sai).",
-                        "Sau khi sửa DNS, lặp lại resolve và mở lại target URL."))
+                Finding(check, tools, "High", "dns.fail", P(
+                    ("host", host), ("targetUrl", targetUrl), ("observed", $"DNS could not resolve {host}: {ex.Message}"),
+                    ("impact", "The target is unavailable through DNS to scanners and users.")), $"host={host}; error={ex.Message}")
             ];
         }
     }
@@ -875,24 +784,13 @@ public sealed class WebsiteScanProcessor(
 
         if (signals.Count > 0)
         {
-            yield return Finding(check, tools, "Info", $"WAF/CDN fingerprint: {string.Join(", ", signals)}",
-                "Nhận diện qua header. wafw00f xác nhận chính xác hơn bằng probe chủ động.",
-                string.Join("; ", signals),
-                "Giữ WAF rules cập nhật; dùng wafw00f trong pipeline để verify vendor.");
+            yield return Finding(check, tools, "Info", "waf.found", P(("signals", string.Join(", ", signals))), string.Join("; ", signals));
         }
         else
         {
-            yield return Finding(check, tools, "Low", "Không thấy WAF fingerprint rõ từ header",
-                "Có thể không có WAF hoặc WAF ẩn fingerprint. Xác minh bằng wafw00f.",
-                null,
-                "Cân nhắc triển khai WAF; chạy wafw00f để xác nhận.");
+            yield return Finding(check, tools, "Low", "waf.none", P(), null);
         }
     }
-
-    private static string ObservedImpact(string observed, string impact) =>
-        $"Observed: {observed}\nImpact: {impact}";
-
-    private static IReadOnlyList<string> Steps(params string[] steps) => steps;
 
     private static string SanitizeSetCookieEvidence(string setCookie)
     {
@@ -921,12 +819,18 @@ public sealed class WebsiteScanProcessor(
         ScanCheckDefinition check,
         IReadOnlyList<string> tools,
         string severity,
-        string title,
-        string detail,
-        string? evidence,
-        string recommendation,
-        IReadOnlyList<string>? reproductionSteps = null) =>
-        new(check.Id, check.Name, severity, title, detail, evidence, recommendation, tools, reproductionSteps);
+        string code,
+        IReadOnlyDictionary<string, string> parameters,
+        string? evidence)
+    {
+        var resolved = ScanI18n.ResolveFinding(code, parameters, "en");
+        return new ScanFindingDto(
+            check.Id, ScanI18n.CheckName(check.Id, "en"), severity, resolved.Title,
+            resolved.Detail, evidence, resolved.Recommendation, tools, resolved.Steps, code, parameters);
+    }
+
+    private static IReadOnlyDictionary<string, string> P(params (string Key, string? Value)[] values) =>
+        values.ToDictionary(value => value.Key, value => value.Value ?? string.Empty, StringComparer.OrdinalIgnoreCase);
 
     private static int Score(IReadOnlyList<ScanFindingDto> findings)
     {

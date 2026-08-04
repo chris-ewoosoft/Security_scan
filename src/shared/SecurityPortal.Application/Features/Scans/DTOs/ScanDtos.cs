@@ -1,4 +1,5 @@
 using SecurityPortal.Domain.Entities;
+using SecurityPortal.Application.Features.Scans.Localization;
 
 namespace SecurityPortal.Application.Features.Scans.DTOs;
 
@@ -39,7 +40,9 @@ public record ScanFindingDto(
     string? Evidence,
     string? Recommendation,
     IReadOnlyList<string> Tools,
-    IReadOnlyList<string>? ReproductionSteps = null);
+    IReadOnlyList<string>? ReproductionSteps = null,
+    string? Code = null,
+    IReadOnlyDictionary<string, string>? Params = null);
 
 public record ScanReportPayloadDto(
     string ReportType,
@@ -76,7 +79,7 @@ public record ScanConfigurationDto(
 
 public static class WebsiteScanMappings
 {
-    public static WebsiteScanDto ToDto(WebsiteScan scan)
+    public static WebsiteScanDto ToDto(WebsiteScan scan, string? lang = null)
     {
         var config = scan.GetConfiguration();
         ScanReportPayloadDto? report = null;
@@ -85,6 +88,8 @@ public static class WebsiteScanMappings
             report = System.Text.Json.JsonSerializer.Deserialize<ScanReportPayloadDto>(
                 scan.FindingsJson,
                 new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+            if (report is not null)
+                report = ScanI18n.LocalizeReport(report, scan.TargetUrl, lang);
         }
 
         return new WebsiteScanDto(
@@ -106,9 +111,5 @@ public static class WebsiteScanMappings
             report);
     }
 
-    public static ScanCatalogDto ToCatalogDto() => new(
-        ScanCatalog.Checks.Select(c => new ScanCheckDto(
-            c.Id, c.Name, c.Description, c.Tools, c.EnabledByDefault, c.Category, c.Priority)).ToList(),
-        ScanCatalog.Tools.Select(t => new ScanToolDto(t.Id, t.Name, t.Kind, t.Description)).ToList(),
-        ScanCatalog.Reports.Select(r => new ScanReportDto(r.Id, r.Name, r.Description)).ToList());
+    public static ScanCatalogDto ToCatalogDto(string? lang = null) => ScanI18n.LocalizeCatalog(lang);
 }

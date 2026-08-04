@@ -1,11 +1,21 @@
 window.SecurityPortalApi = (() => {
   const candidates = ["/api/v1", "http://localhost:5000/api/v1"];
 
+  function currentLang() {
+    return window.SecurityPortalI18n?.getLocale?.() || "vi";
+  }
+
   async function apiFetch(path, options = {}) {
     let lastError = null;
+    const headers = new Headers(options.headers || {});
+    if (!headers.has("Accept-Language")) {
+      headers.set("Accept-Language", currentLang());
+    }
+    const nextOptions = { ...options, headers };
+
     for (const base of candidates) {
       try {
-        const res = await fetch(`${base}${path}`, options);
+        const res = await fetch(`${base}${path}`, nextOptions);
         if (res.status === 502 || res.status === 503 || res.status === 504) {
           lastError = new Error(`API gateway error (${res.status})`);
           continue;
@@ -15,7 +25,8 @@ window.SecurityPortalApi = (() => {
         lastError = err;
       }
     }
-    throw lastError || new Error("Không kết nối được API.");
+    const unreachable = window.SecurityPortalI18n?.t?.("api.unreachable") || "Could not reach the API.";
+    throw lastError || new Error(unreachable);
   }
 
   function extractError(data) {
@@ -38,6 +49,7 @@ window.SecurityPortalApi = (() => {
     if (status === "Running" || status === "Queued") return "is-running";
     if (status === "Completed") return "is-completed";
     if (status === "Failed") return "is-failed";
+    if (status === "Cancelled") return "is-cancelled";
     return "";
   }
 
@@ -57,7 +69,6 @@ window.SecurityPortalApi = (() => {
       .replaceAll('"', "&quot;");
   }
 
-  /** Soft-wrap long lines so report text fits the panel (~96 chars/line). */
   function wrapReportLines(value, maxChars = 96) {
     const text = String(value ?? "");
     if (!text || maxChars < 24) return text;
@@ -91,7 +102,8 @@ window.SecurityPortalApi = (() => {
 
   function formatWhen(iso) {
     try {
-      return new Date(iso).toLocaleString("vi-VN");
+      const locale = currentLang() === "en" ? "en-US" : "vi-VN";
+      return new Date(iso).toLocaleString(locale);
     } catch {
       return iso;
     }

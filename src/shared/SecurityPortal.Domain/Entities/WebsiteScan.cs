@@ -93,6 +93,8 @@ public class WebsiteScan : AggregateRoot
         string? serverHeader,
         string findingsJson)
     {
+        if (Status == ScanStatus.Cancelled) return;
+
         Status = ScanStatus.Completed;
         Summary = summary;
         HttpStatusCode = httpStatusCode;
@@ -107,10 +109,26 @@ public class WebsiteScan : AggregateRoot
 
     public void MarkFailed(string errorMessage)
     {
+        if (Status == ScanStatus.Cancelled) return;
+
         Status = ScanStatus.Failed;
         ErrorMessage = errorMessage;
         CompletedAt = DateTime.UtcNow;
         SetUpdatedAt();
+    }
+
+    /// <summary>Stops a queued or running scan. Returns false if already terminal.</summary>
+    public bool TryCancel(string? reason = null)
+    {
+        if (Status is not (ScanStatus.Queued or ScanStatus.Running))
+            return false;
+
+        Status = ScanStatus.Cancelled;
+        ErrorMessage = string.IsNullOrWhiteSpace(reason) ? "Scan cancelled by user." : reason.Trim();
+        Summary = ErrorMessage;
+        CompletedAt = DateTime.UtcNow;
+        SetUpdatedAt();
+        return true;
     }
 
     private static string NormalizeUrl(string input)

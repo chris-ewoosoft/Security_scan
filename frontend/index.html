@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Trang chủ — Security Portal</title>
+  <title>Security Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=22" />
+  <link rel="stylesheet" href="/styles.css?v=25" />
 </head>
 <body class="page-home">
   <div class="atmosphere" aria-hidden="true"></div>
@@ -16,20 +16,24 @@
   <header class="topbar">
     <a class="brand" href="/">Security Portal</a>
     <nav class="main-nav">
-      <a class="nav-item is-active" href="/" data-nav="home">Trang chủ</a>
-      <a class="nav-item" href="/?view=config" data-nav="config">Cấu hình</a>
-      <a class="nav-item" href="/?view=history" data-nav="history">Lịch sử</a>
+      <a class="nav-item is-active" href="/" data-nav="home" data-i18n="nav.home">Trang chủ</a>
+      <a class="nav-item" href="/?view=config" data-nav="config" data-i18n="nav.config">Cấu hình</a>
+      <a class="nav-item" href="/?view=history" data-nav="history" data-i18n="nav.history">Lịch sử</a>
     </nav>
+    <div class="lang-switch" role="group" aria-label="Language">
+      <button type="button" class="lang-btn" data-lang="vi" data-i18n="lang.vi">VI</button>
+      <button type="button" class="lang-btn" data-lang="en" data-i18n="lang.en">EN</button>
+    </div>
   </header>
 
   <main class="home-split">
     <section class="home-left" aria-label="Security Portal">
       <p class="brand-mark">Security Portal</p>
-      <h1>Quét bảo mật website</h1>
-      <p class="lede">Cột trái: scan. Cột phải: Cấu hình, Lịch sử hoặc Technical Report.</p>
+      <h1 data-i18n="home.title">Quét bảo mật website</h1>
+      <p class="lede" data-i18n="home.lede">Cột trái: scan. Cột phải: Cấu hình, Lịch sử hoặc Technical Report.</p>
 
       <form id="scan-form" class="scan-form" autocomplete="off">
-        <label class="sr-only" for="target-url">Địa chỉ website cần scan</label>
+        <label class="sr-only" for="target-url" data-i18n="home.urlLabel">Địa chỉ website cần scan</label>
         <div class="url-row url-row-stack">
           <input
             id="target-url"
@@ -41,28 +45,33 @@
             spellcheck="false"
             autocomplete="url"
           />
-          <button type="submit" id="scan-btn">Bắt đầu scan</button>
+          <div class="scan-actions">
+            <button type="submit" id="scan-btn" data-i18n="home.scan">Bắt đầu scan</button>
+            <button type="button" id="stop-scan-btn" class="ghost-btn danger-btn" hidden data-i18n="home.stop">
+              Dừng scan
+            </button>
+          </div>
         </div>
         <p id="form-error" class="form-error" hidden></p>
       </form>
 
       <aside class="config-snapshot" id="config-snapshot">
         <div>
-          <p class="snapshot-label">Cấu hình đang dùng</p>
-          <p id="config-summary" class="snapshot-text">Đang tải…</p>
+          <p class="snapshot-label" data-i18n="home.configLabel">Cấu hình đang dùng</p>
+          <p id="config-summary" class="snapshot-text" data-i18n="home.configLoading">Đang tải…</p>
         </div>
         <div class="snapshot-actions">
-          <button type="button" class="ghost-btn" id="open-config-btn">Chỉnh cấu hình</button>
-          <button type="button" class="ghost-btn" id="open-history-btn">Lịch sử</button>
+          <button type="button" class="ghost-btn" id="open-config-btn" data-i18n="home.openConfig">Chỉnh cấu hình</button>
+          <button type="button" class="ghost-btn" id="open-history-btn" data-i18n="home.openHistory">Lịch sử</button>
         </div>
       </aside>
     </section>
 
     <section class="home-right" aria-label="Right panel">
       <div id="report-placeholder" class="report-placeholder">
-        <p class="eyebrow">Cột phải</p>
-        <h2>Chưa có báo cáo</h2>
-        <p>Mở <strong>Cấu hình</strong>, <strong>Lịch sử</strong>, hoặc bắt đầu scan để xem Technical Report tại đây.</p>
+        <p class="eyebrow" data-i18n="placeholder.eyebrow">Cột phải</p>
+        <h2 data-i18n="placeholder.title">Chưa có báo cáo</h2>
+        <p data-i18n="placeholder.body">Mở Cấu hình, Lịch sử, hoặc bắt đầu scan để xem Technical Report tại đây.</p>
       </div>
 
       <div id="config-panel" class="home-config-panel" hidden></div>
@@ -71,57 +80,59 @@
       <div id="report-panel" class="home-report-panel" hidden>
         <div class="report-hero">
           <div>
-            <p class="eyebrow">Technical Report</p>
+            <p class="eyebrow" data-i18n="report.eyebrow">Technical Report</p>
             <h2 class="page-title" id="report-title">Technical Report</h2>
             <p class="lede" id="report-target"></p>
             <p class="risk-legend" id="risk-legend">
-              <span class="risk-legend-title">Cách đọc Risk</span>
+              <span class="risk-legend-title" data-i18n="risk.legendTitle">Cách đọc Risk</span>
               <span class="risk-legend-scale">
-                <span class="sev-high">≥ 70: High</span>
-                <span class="sev-medium">40–69: Medium</span>
-                <span class="sev-low">&lt; 40: Low</span>
+                <span class="sev-high" data-i18n="risk.high">≥ 70: High</span>
+                <span class="sev-medium" data-i18n="risk.medium">40–69: Medium</span>
+                <span class="sev-low" data-i18n="risk.low">&lt; 40: Low</span>
               </span>
-              <span class="risk-legend-formula">
+              <span class="risk-legend-formula" data-i18n="risk.formula">
                 Điểm = tổng finding (High +25, Medium +12, Low +5, Info +0), tối đa 100.
-                Điểm càng thấp càng tốt — 0/100 là an toàn nhất, 100/100 là rủi ro cao nhất.
               </span>
             </p>
           </div>
           <div class="risk-actions">
             <div class="risk-panel">
-              <span class="muted">Risk</span>
+              <span class="muted" data-i18n="report.risk">Risk</span>
               <strong id="risk-level">—</strong>
               <span id="risk-score" class="muted">—/100</span>
             </div>
-            <button type="button" class="ghost-btn" id="export-report-btn" disabled title="Xuất báo cáo HTML">
+            <button type="button" class="ghost-btn" id="export-report-btn" disabled data-i18n="report.export" data-i18n-title="report.export">
               Export Report
             </button>
           </div>
         </div>
 
         <section class="config-block">
-          <h2>Trạng thái scan</h2>
+          <h2 data-i18n="report.statusTitle">Trạng thái scan</h2>
           <div class="status-head">
             <span id="status-badge" class="badge">Queued</span>
             <span id="status-summary" class="summary"></span>
+            <button type="button" id="stop-scan-report-btn" class="ghost-btn danger-btn stop-inline-btn" hidden data-i18n="home.stop">
+              Dừng scan
+            </button>
           </div>
           <dl class="metrics compact">
-            <div><dt>HTTP</dt><dd id="metric-http">—</dd></div>
-            <div><dt>Thời gian</dt><dd id="metric-time">—</dd></div>
-            <div><dt>HTTPS</dt><dd id="metric-https">—</dd></div>
-            <div><dt>Server</dt><dd id="metric-server">—</dd></div>
+            <div><dt data-i18n="report.metricHttp">HTTP</dt><dd id="metric-http">—</dd></div>
+            <div><dt data-i18n="report.metricTime">Thời gian</dt><dd id="metric-time">—</dd></div>
+            <div><dt data-i18n="report.metricHttps">HTTPS</dt><dd id="metric-https">—</dd></div>
+            <div><dt data-i18n="report.metricServer">Server</dt><dd id="metric-server">—</dd></div>
           </dl>
         </section>
 
         <section class="config-block executive-summary-block">
           <p class="executive-summary-line">
-            <strong class="executive-summary-label">Executive summary</strong>
+            <strong class="executive-summary-label" data-i18n="report.execLabel">Executive summary</strong>
             <span id="scan-progress" class="scan-progress" hidden>
               <span class="scan-spinner" aria-hidden="true"></span>
               <span id="scan-progress-label">Đang scan…</span>
               <span id="scan-progress-pct" class="scan-progress-pct"></span>
             </span>
-            <span id="executive-summary">Đang chờ kết quả…</span>
+            <span id="executive-summary" data-i18n="report.execWaiting">Đang chờ kết quả…</span>
           </p>
           <div id="scan-progress-track" class="scan-progress-track" hidden>
             <div id="scan-progress-fill" class="scan-progress-fill"></div>
@@ -129,23 +140,25 @@
         </section>
 
         <section class="config-block">
-          <h2>Findings</h2>
+          <h2 data-i18n="report.findings">Findings</h2>
           <div id="findings-list" class="findings-table-wrap">
-            <p class="muted">Chưa có findings.</p>
+            <p class="muted" data-i18n="report.findingsPending">Chưa có findings.</p>
           </div>
         </section>
 
         <p class="history-link-note muted">
-          Xem lại trong <a href="/?view=history">Lịch sử</a>.
+          <span data-i18n="report.historyNote">Xem lại trong</span>
+          <a href="/?view=history" data-i18n="report.historyLink">Lịch sử</a>.
         </p>
       </div>
     </section>
   </main>
 
-  <script src="/api-client.js?v=4"></script>
+  <script src="/i18n.js?v=3"></script>
+  <script src="/api-client.js?v=7"></script>
   <script src="/config-store.js?v=3"></script>
-  <script src="/configure.js?v=7"></script>
-  <script src="/history.js?v=4"></script>
-  <script src="/home.js?v=17"></script>
+  <script src="/configure.js?v=9"></script>
+  <script src="/history.js?v=6"></script>
+  <script src="/home.js?v=21"></script>
 </body>
 </html>

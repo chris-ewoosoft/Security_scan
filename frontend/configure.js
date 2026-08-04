@@ -1,10 +1,12 @@
 window.SecurityPortalConfigure = (() => {
   const { apiFetch, escapeHtml, formatWhen } = window.SecurityPortalApi;
   const ConfigStore = window.SecurityPortalConfig;
+  const I18n = window.SecurityPortalI18n;
+  const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
 
   function mount(root, options = {}) {
     if (!ConfigStore) {
-      root.innerHTML = "<p class='form-error'>Không tải được bộ nhớ cấu hình.</p>";
+      root.innerHTML = `<p class='form-error'>${escapeHtml(t("config.storeMissing"))}</p>`;
       return { destroy() {} };
     }
 
@@ -12,41 +14,41 @@ window.SecurityPortalConfigure = (() => {
       <div class="config-panel-inner">
         <div class="report-hero">
           <div>
-            <p class="eyebrow">Cấu hình scan</p>
-            <h2 class="page-title">Chọn checks · tools · report</h2>
-            <p class="lede">Tích chọn sẽ tự lưu và áp dụng cho mọi lần scan trên cột trái.</p>
+            <p class="eyebrow">${escapeHtml(t("config.eyebrow"))}</p>
+            <h2 class="page-title">${escapeHtml(t("config.title"))}</h2>
+            <p class="lede">${escapeHtml(t("config.lede"))}</p>
           </div>
-          <button type="button" class="ghost-btn" data-action="close-config">Đóng</button>
+          <button type="button" class="ghost-btn" data-action="close-config">${escapeHtml(t("config.close"))}</button>
         </div>
 
-        <div data-role="save-banner" class="save-banner">Đang tải cấu hình…</div>
+        <div data-role="save-banner" class="save-banner">${escapeHtml(t("config.loading"))}</div>
         <p data-role="form-error" class="form-error" hidden></p>
 
         <form data-role="config-form" class="config-form">
           <section class="config-block">
             <div class="block-head">
-              <h2>Vấn đề security</h2>
-              <button type="button" class="linkish" data-action="defaults">Chọn mặc định</button>
+              <h2>${escapeHtml(t("config.checks"))}</h2>
+              <button type="button" class="linkish" data-action="defaults">${escapeHtml(t("config.defaults"))}</button>
             </div>
             <div data-role="checks-list" class="option-grid"></div>
           </section>
 
           <section class="config-block">
             <div class="block-head">
-              <h2>Tools</h2>
-              <span class="muted">Tự gợi ý theo checks · Built-in / External</span>
+              <h2>${escapeHtml(t("config.tools"))}</h2>
+              <span class="muted">${escapeHtml(t("config.toolsHint"))}</span>
             </div>
             <div data-role="tools-list" class="option-grid"></div>
           </section>
 
           <section class="config-block">
-            <h2>Security report</h2>
+            <h2>${escapeHtml(t("config.reports"))}</h2>
             <div data-role="reports-list" class="report-list"></div>
           </section>
 
           <div class="actions">
-            <button type="button" class="ghost-btn" data-action="close-config">Về báo cáo / trống</button>
-            <button type="button" data-action="save">Lưu cấu hình</button>
+            <button type="button" class="ghost-btn" data-action="close-config">${escapeHtml(t("config.back"))}</button>
+            <button type="button" data-action="save">${escapeHtml(t("config.save"))}</button>
           </div>
         </form>
       </div>
@@ -87,18 +89,18 @@ window.SecurityPortalConfigure = (() => {
       formError.textContent = "";
     }
 
-    function persist(reason = "Đã lưu cấu hình") {
+    function persist(reason = t("config.saved")) {
       clearError();
       const config = currentConfig();
 
       if (!config.checks.length) {
-        showError("Chọn ít nhất một vấn đề security.");
+        showError(t("config.needChecks"));
         return false;
       }
       if (!config.tools.length) {
         const suggested = new Set();
         form.querySelectorAll('input[name="checks"]:checked').forEach((el) => {
-          (el.dataset.tools || "").split(",").filter(Boolean).forEach((t) => suggested.add(t));
+          (el.dataset.tools || "").split(",").filter(Boolean).forEach((toolId) => suggested.add(toolId));
         });
         form.querySelectorAll('input[name="tools"]').forEach((el) => {
           el.checked = suggested.has(el.value);
@@ -106,11 +108,11 @@ window.SecurityPortalConfigure = (() => {
         config.tools = selectedValues("tools");
       }
       if (!config.tools.length) {
-        showError("Chọn ít nhất một tool.");
+        showError(t("config.needTools"));
         return false;
       }
       if (!config.reportType) {
-        showError("Chọn loại security report.");
+        showError(t("config.needReport"));
         return false;
       }
 
@@ -118,27 +120,31 @@ window.SecurityPortalConfigure = (() => {
         const saved = ConfigStore.save(config);
         const loaded = ConfigStore.load();
         if (loaded.checks.length !== saved.checks.length || loaded.reportType !== saved.reportType) {
-          showError("Lưu cấu hình thất bại (trình duyệt chặn localStorage).");
+          showError(t("config.saveBlocked"));
           return false;
         }
 
         saveBanner.hidden = false;
-        saveBanner.textContent =
-          `${reason}: ${saved.checks.length} checks · ${saved.tools.length} tools · ${saved.reportType}. ` +
-          `Cập nhật: ${formatWhen(saved.updatedAt)}`;
-        saveBtn.textContent = "Đã lưu";
-        setTimeout(() => { saveBtn.textContent = "Lưu cấu hình"; }, 1200);
+        saveBanner.textContent = t("config.bannerSaved", {
+          reason,
+          checks: saved.checks.length,
+          tools: saved.tools.length,
+          report: saved.reportType,
+          when: formatWhen(saved.updatedAt),
+        });
+        saveBtn.textContent = t("config.savedShort");
+        setTimeout(() => { saveBtn.textContent = t("config.save"); }, 1200);
         options.onSaved?.(saved);
         return true;
       } catch (err) {
-        showError(err.message || "Không lưu được cấu hình vào trình duyệt.");
+        showError(err.message || t("config.saveFailed"));
         return false;
       }
     }
 
     function schedulePersist() {
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => persist("Đã tự lưu khi chọn"), 250);
+      saveTimer = setTimeout(() => persist(t("config.autosaved")), 250);
     }
 
     function applySavedSelection(saved) {
@@ -162,7 +168,7 @@ window.SecurityPortalConfigure = (() => {
     function syncToolsFromChecks() {
       const suggested = new Set();
       form.querySelectorAll('input[name="checks"]:checked').forEach((el) => {
-        (el.dataset.tools || "").split(",").filter(Boolean).forEach((t) => suggested.add(t));
+        (el.dataset.tools || "").split(",").filter(Boolean).forEach((toolId) => suggested.add(toolId));
       });
       form.querySelectorAll('input[name="tools"]').forEach((el) => {
         el.checked = suggested.has(el.value);
@@ -232,11 +238,11 @@ window.SecurityPortalConfigure = (() => {
           form.querySelectorAll('input[name="reportType"]').forEach((el) => { el.checked = false; });
           technical.checked = true;
         }
-        persist("Đã lưu cấu hình mặc định");
+        persist(t("config.savedDefaults"));
         return;
       }
       if (action === "save") {
-        persist("Đã lưu cấu hình");
+        persist(t("config.saved"));
       }
     };
 
@@ -245,16 +251,16 @@ window.SecurityPortalConfigure = (() => {
 
     apiFetch("/scans/catalog", { headers: { Accept: "application/json" } })
       .then(async (res) => {
-        if (!res.ok) throw new Error("Không tải được catalog cấu hình.");
+        if (!res.ok) throw new Error(t("config.catalogError"));
         catalog = await res.json();
         const saved = ConfigStore.load();
         renderCatalog(saved);
         saveBanner.hidden = false;
         saveBanner.textContent = saved.updatedAt
-          ? `Cấu hình hiện tại đã lưu lúc ${formatWhen(saved.updatedAt)}. Tích chọn sẽ tự lưu.`
-          : "Chưa có cấu hình lưu. Tích chọn sẽ tự lưu ngay trên trình duyệt.";
+          ? t("config.savedAt", { when: formatWhen(saved.updatedAt) })
+          : t("config.notSaved");
       })
-      .catch((err) => showError(err.message || "Lỗi tải cấu hình."));
+      .catch((err) => showError(err.message || t("config.loadError")));
 
     return {
       destroy() {

@@ -96,6 +96,8 @@ builder.Services.AddHttpClient("WebsiteScanner", client =>
     ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
 });
 
+builder.Services.AddSingleton<SecurityPortal.API.Services.ScanCancellationRegistry>();
+builder.Services.AddSingleton<SecurityPortal.Application.Common.Interfaces.IScanAbortSignal, SecurityPortal.API.Services.ScanAbortSignal>();
 builder.Services.AddHostedService<SecurityPortal.API.Services.WebsiteScanProcessor>();
 
 var app = builder.Build();

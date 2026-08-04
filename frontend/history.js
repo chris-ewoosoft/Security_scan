@@ -1,27 +1,29 @@
 window.SecurityPortalHistory = (() => {
   const { apiFetch, statusClass, escapeHtml, formatWhen } = window.SecurityPortalApi;
+  const I18n = window.SecurityPortalI18n;
+  const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
 
   function mount(root, options = {}) {
     root.innerHTML = `
       <div class="history-panel-inner">
         <div class="report-hero">
           <div>
-            <p class="eyebrow">Lịch sử</p>
-            <h2 class="page-title">Scan &amp; báo cáo trước đây</h2>
-            <p class="lede">Chọn một mục để mở Technical Report. Tích chọn để xóa.</p>
+            <p class="eyebrow">${escapeHtml(t("history.eyebrow"))}</p>
+            <h2 class="page-title">${escapeHtml(t("history.title"))}</h2>
+            <p class="lede">${escapeHtml(t("history.lede"))}</p>
           </div>
           <div class="history-hero-actions">
             <button type="button" class="ghost-btn danger-btn" data-action="delete-selected" disabled>
-              Xóa
+              ${escapeHtml(t("history.delete"))}
             </button>
-            <button type="button" class="ghost-btn" data-action="close-history">Đóng</button>
+            <button type="button" class="ghost-btn" data-action="close-history">${escapeHtml(t("history.close"))}</button>
           </div>
         </div>
 
         <section class="config-block history-list-block">
           <div class="block-head">
-            <h2>Danh sách scan</h2>
-            <button type="button" class="linkish" data-action="refresh">Làm mới</button>
+            <h2>${escapeHtml(t("history.listTitle"))}</h2>
+            <button type="button" class="linkish" data-action="refresh">${escapeHtml(t("history.refresh"))}</button>
           </div>
           <p data-role="history-error" class="form-error" hidden></p>
           <p data-role="history-status" class="muted history-status" hidden></p>
@@ -30,14 +32,14 @@ window.SecurityPortalHistory = (() => {
               <thead>
                 <tr>
                   <th scope="col" class="col-select">
-                    <label class="history-select-all" title="Chọn tất cả">
+                    <label class="history-select-all" title="${escapeHtml(t("history.selectAll"))}">
                       <input type="checkbox" data-role="select-all" />
-                      <span>Chọn tất cả</span>
+                      <span>${escapeHtml(t("history.selectAll"))}</span>
                     </label>
                   </th>
-                  <th scope="col" class="col-when">Thời gian scan</th>
-                  <th scope="col" class="col-url">URL</th>
-                  <th scope="col" class="col-status">Trạng thái</th>
+                  <th scope="col" class="col-when">${escapeHtml(t("history.when"))}</th>
+                  <th scope="col" class="col-url">${escapeHtml(t("history.url"))}</th>
+                  <th scope="col" class="col-status">${escapeHtml(t("history.status"))}</th>
                 </tr>
               </thead>
               <tbody data-role="history-list"></tbody>
@@ -88,14 +90,14 @@ window.SecurityPortalHistory = (() => {
       showStatus("");
       try {
         const res = await apiFetch("/scans?take=50", { headers: { Accept: "application/json" } });
-        if (!res.ok) throw new Error(`Không tải được lịch sử (HTTP ${res.status}).`);
+        if (!res.ok) throw new Error(`${t("history.loadError")} (HTTP ${res.status}).`);
         const items = await res.json();
         historyList.innerHTML = "";
 
         if (!items.length) {
           historyList.innerHTML = `
             <tr class="history-empty">
-              <td colspan="4">Chưa có scan nào trong lịch sử</td>
+              <td colspan="4">${escapeHtml(t("history.empty"))}</td>
             </tr>`;
           syncSelectionUi();
           return;
@@ -108,7 +110,7 @@ window.SecurityPortalHistory = (() => {
           const risk = item.report?.riskLevel ? ` · Risk ${item.report.riskLevel}` : "";
           tr.innerHTML = `
             <td class="col-select">
-              <label class="history-check" title="Chọn để xóa">
+              <label class="history-check" title="${escapeHtml(t("history.selectToDelete"))}">
                 <input type="checkbox" data-role="row-check" value="${escapeHtml(item.id)}" />
               </label>
             </td>
@@ -134,7 +136,7 @@ window.SecurityPortalHistory = (() => {
         syncSelectionUi();
       } catch (err) {
         historyError.hidden = false;
-        historyError.textContent = err.message || "Lỗi tải lịch sử.";
+        historyError.textContent = err.message || t("history.loadError");
         syncSelectionUi();
       }
     }
@@ -143,13 +145,16 @@ window.SecurityPortalHistory = (() => {
       const ids = selectedIds();
       if (!ids.length) return;
 
-      const label = ids.length === 1 ? "1 scan đã chọn" : `${ids.length} scan đã chọn`;
-      const ok = window.confirm(`Xóa ${label} khỏi lịch sử? Thao tác không hoàn tác.`);
+      const ok = window.confirm(
+        ids.length === 1
+          ? t("history.deleteConfirmOne")
+          : t("history.deleteConfirmMany", { count: ids.length })
+      );
       if (!ok) return;
 
       if (deleteBtn) deleteBtn.disabled = true;
       historyError.hidden = true;
-      showStatus("Đang xóa…");
+      showStatus(t("history.deleting"));
 
       try {
         const res = await apiFetch("/scans", {
@@ -162,17 +167,17 @@ window.SecurityPortalHistory = (() => {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(data.detail || `Không xóa được (HTTP ${res.status}).`);
+          throw new Error(data.detail || `${t("history.deleteError")} (HTTP ${res.status}).`);
         }
 
         const deleted = data.deleted ?? ids.length;
-        showStatus(`Đã xóa ${deleted} scan.`);
+        showStatus(t("history.deleted", { count: deleted }));
         options.onDeleted?.(ids);
         if (ids.includes(activeScanId)) activeScanId = null;
         await loadHistory();
       } catch (err) {
         historyError.hidden = false;
-        historyError.textContent = err.message || "Lỗi xóa lịch sử.";
+        historyError.textContent = err.message || t("history.deleteError");
         syncSelectionUi();
       } finally {
         showStatus("");

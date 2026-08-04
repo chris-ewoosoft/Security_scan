@@ -9,13 +9,15 @@ namespace SecurityPortal.API.Controllers.v1;
 
 public class ScansController(IMediator mediator) : BaseController(mediator)
 {
+    private string? Language => Request.Headers.AcceptLanguage.FirstOrDefault()?.Split(',')[0].Trim();
+
     /// <summary>Catalog of security checks, tools, and report types</summary>
     [AllowAnonymous]
     [HttpGet("catalog")]
     [ProducesResponseType(typeof(ScanCatalogDto), 200)]
     public async Task<IActionResult> GetCatalog()
     {
-        var result = await Mediator.Send(new GetScanCatalogQuery());
+        var result = await Mediator.Send(new GetScanCatalogQuery(Language));
         return Ok(result);
     }
 
@@ -43,7 +45,7 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     [ProducesResponseType(404)]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var result = await Mediator.Send(new GetWebsiteScanQuery(id));
+        var result = await Mediator.Send(new GetWebsiteScanQuery(id, Language));
         return Ok(result);
     }
 
@@ -53,7 +55,7 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     [ProducesResponseType(typeof(IReadOnlyList<WebsiteScanDto>), 200)]
     public async Task<IActionResult> ListRecent([FromQuery] int take = 10)
     {
-        var result = await Mediator.Send(new ListRecentWebsiteScansQuery(take));
+        var result = await Mediator.Send(new ListRecentWebsiteScansQuery(take, Language));
         return Ok(result);
     }
 
@@ -69,6 +71,18 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
             return UnprocessableEntity(new { detail = "Chọn ít nhất một scan để xóa." });
 
         var result = await Mediator.Send(new DeleteWebsiteScansCommand(ids));
+        return Ok(result);
+    }
+
+    /// <summary>Stop a queued or running website scan</summary>
+    [AllowAnonymous]
+    [HttpPost("{id:guid}/cancel")]
+    [ProducesResponseType(typeof(WebsiteScanDto), 200)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(422)]
+    public async Task<IActionResult> Cancel(Guid id)
+    {
+        var result = await Mediator.Send(new CancelWebsiteScanCommand(id));
         return Ok(result);
     }
 }

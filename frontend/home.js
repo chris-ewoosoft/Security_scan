@@ -12,10 +12,16 @@
   const ConfigStore = window.SecurityPortalConfig;
   const Configure = window.SecurityPortalConfigure;
   const HistoryPanel = window.SecurityPortalHistory;
+  const I18n = window.SecurityPortalI18n;
+  const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
+
+  I18n?.applyDom();
 
   const form = document.getElementById("scan-form");
   const input = document.getElementById("target-url");
   const scanBtn = document.getElementById("scan-btn");
+  const stopScanBtn = document.getElementById("stop-scan-btn");
+  const stopScanReportBtn = document.getElementById("stop-scan-report-btn");
   const formError = document.getElementById("form-error");
   const configSummary = document.getElementById("config-summary");
   const reportPanel = document.getElementById("report-panel");
@@ -39,6 +45,79 @@
   let historyMount = null;
   let rightView = "placeholder"; // placeholder | report | config | history
 
+  document.querySelectorAll("[data-lang]").forEach((btn) => {
+    btn.addEventListener("click", () => I18n?.setLocale(btn.getAttribute("data-lang")));
+  });
+
+  function setStopVisible(visible) {
+    const show = !!visible;
+    if (stopScanBtn) stopScanBtn.hidden = !show;
+    if (stopScanReportBtn) stopScanReportBtn.hidden = !show;
+    if (!show) {
+      if (stopScanBtn) {
+        stopScanBtn.disabled = false;
+        stopScanBtn.textContent = t("home.stop");
+      }
+      if (stopScanReportBtn) {
+        stopScanReportBtn.disabled = false;
+        stopScanReportBtn.textContent = t("home.stop");
+      }
+    }
+  }
+
+  async function stopActiveScan() {
+    const id = (activeScanId && activeScanId !== "pending" ? activeScanId : null)
+      || (lastScan?.id && lastScan.id !== "pending" ? lastScan.id : null);
+    if (!id) {
+      formError.hidden = false;
+      formError.textContent = t("home.stopFailed");
+      return;
+    }
+
+    if (stopScanBtn) {
+      stopScanBtn.disabled = true;
+      stopScanBtn.textContent = t("home.stopping");
+    }
+    if (stopScanReportBtn) {
+      stopScanReportBtn.disabled = true;
+      stopScanReportBtn.textContent = t("home.stopping");
+    }
+
+    try {
+      const res = await apiFetch(`/scans/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(extractError(data) || `${t("home.stopFailed")} (HTTP ${res.status}).`);
+      }
+
+      stopPolling();
+      activeScanId = data.id || id;
+      lastScan = data;
+      scanBtn.disabled = false;
+      scanBtn.textContent = t("home.scan");
+      setStopVisible(false);
+      renderReport(data);
+    } catch (err) {
+      formError.hidden = false;
+      formError.textContent = err.message || t("home.stopFailed");
+      setStopVisible(true);
+      if (stopScanBtn) {
+        stopScanBtn.disabled = false;
+        stopScanBtn.textContent = t("home.stop");
+      }
+      if (stopScanReportBtn) {
+        stopScanReportBtn.disabled = false;
+        stopScanReportBtn.textContent = t("home.stop");
+      }
+    }
+  }
+
+  stopScanBtn?.addEventListener("click", () => stopActiveScan());
+  stopScanReportBtn?.addEventListener("click", () => stopActiveScan());
+
   function leavePanelUrl() {
     const id = activeScanId && activeScanId !== "pending" ? activeScanId : null;
     return id ? `/?id=${encodeURIComponent(id)}` : "/";
@@ -60,7 +139,11 @@
 
     if (view === "config") {
       history.replaceState(null, "", "/?view=config");
-      if (!configMount && Configure) {
+      if (configMount) {
+        configMount.destroy?.();
+        configMount = null;
+      }
+      if (Configure) {
         configMount = Configure.mount(configPanel, {
           onSaved() {
             renderConfigSnapshot();
@@ -74,7 +157,11 @@
       }
     } else if (view === "history") {
       history.replaceState(null, "", "/?view=history");
-      if (!historyMount && HistoryPanel) {
+      if (historyMount) {
+        historyMount.destroy?.();
+        historyMount = null;
+      }
+      if (HistoryPanel) {
         historyMount = HistoryPanel.mount(historyPanel, {
           activeScanId: activeScanId && activeScanId !== "pending" ? activeScanId : null,
           onSelect(scanId) {
@@ -94,9 +181,6 @@
             history.replaceState(null, "", leavePanelUrl());
           },
         });
-      } else {
-        historyMount?.setActive?.(activeScanId && activeScanId !== "pending" ? activeScanId : null);
-        historyMount?.refresh?.();
       }
     } else if (view === "report" && lastScan) {
       const id = lastScan.id && lastScan.id !== "pending" ? lastScan.id : null;
@@ -139,10 +223,10 @@
     const config = getScanConfig();
     const summary = ConfigStore.summarize(config, catalog);
     const updated = summary.updatedAt
-      ? ` · cập nhật ${formatWhen(summary.updatedAt)}`
-      : " · mặc định hệ thống";
+      ? ` · ${t("snapshot.updated")} ${formatWhen(summary.updatedAt)}`
+      : ` · ${t("snapshot.default")}`;
     configSummary.textContent =
-      `${summary.checkCount} checks · ${summary.toolCount} tools · ${summary.reportName}${updated}`;
+      `${summary.checkCount} ${t("snapshot.checks")} · ${summary.toolCount} ${t("snapshot.tools")} · ${summary.reportName}${updated}`;
   }
 
   function openReportPanel(scan) {
@@ -183,20 +267,21 @@
     const targetUrl = normalizeUrl(input.value);
     if (!targetUrl) {
       formError.hidden = false;
-      formError.textContent = "Vui lòng nhập địa chỉ website cần scan.";
+      formError.textContent = t("home.urlRequired");
       input.focus();
       return;
     }
 
     const config = getScanConfig();
     scanBtn.disabled = true;
-    scanBtn.textContent = "Đang scan…";
+    scanBtn.textContent = t("home.scanning");
+    setStopVisible(false);
 
     openReportPanel({
       id: "pending",
       targetUrl,
       status: "Queued",
-      summary: "Đang khởi tạo Security Report…",
+      summary: t("report.processing"),
       reportType: config.reportType,
       configuration: config,
       report: null,
@@ -215,39 +300,48 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(extractError(data) || `Không thể bắt đầu scan (HTTP ${res.status}).`);
+        throw new Error(extractError(data) || `${t("home.scanStartFailed")} (HTTP ${res.status}).`);
       }
 
       openReportPanel(data);
       startPolling(data.id);
+      setStopVisible(true);
 
       const historyNote = document.querySelector(".history-link-note a");
       if (historyNote) historyNote.href = `/?view=history`;
     } catch (err) {
       formError.hidden = false;
-      formError.textContent = err.message || "Có lỗi xảy ra.";
+      formError.textContent = err.message || t("home.genericError");
       document.getElementById("status-badge").textContent = "Failed";
       document.getElementById("status-badge").className = "badge is-failed";
-      document.getElementById("status-summary").textContent = err.message || "Scan thất bại.";
-      document.getElementById("executive-summary").textContent = err.message || "Không tạo được Security Report.";
-      updateScanProgressUi({ status: "Failed" });
+      document.getElementById("status-summary").textContent = err.message || t("home.scanFailed");
+      document.getElementById("executive-summary").textContent = err.message || t("home.reportFailed");
       stopPolling();
-    } finally {
       scanBtn.disabled = false;
-      scanBtn.textContent = "Bắt đầu scan";
+      scanBtn.textContent = t("home.scan");
+      setStopVisible(false);
+      updateScanProgressUi({ status: "Failed" });
+    } finally {
+      if (!isScanInProgress(lastScan?.status)) {
+        scanBtn.disabled = false;
+        scanBtn.textContent = t("home.scan");
+      }
     }
   });
 
   async function refreshReport() {
     if (!activeScanId || activeScanId === "pending") return;
     const res = await apiFetch(`/scans/${activeScanId}`, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`Không tải được báo cáo (HTTP ${res.status}).`);
+    if (!res.ok) throw new Error(`${t("report.loadFailed")} (HTTP ${res.status}).`);
     const scan = await res.json();
     lastScan = scan;
     if (rightView === "report") renderReport(scan);
     if (scan.status === "Completed" || scan.status === "Failed" || scan.status === "Cancelled") {
       stopPolling();
       scanProgressStartedAt = null;
+      scanBtn.disabled = false;
+      scanBtn.textContent = t("home.scan");
+      setStopVisible(false);
     }
   }
 
@@ -261,7 +355,7 @@
     const steps = Array.isArray(f.reproductionSteps) ? f.reproductionSteps.filter(Boolean) : [];
     const reproduceHtml = steps.length
       ? `<div class="finding-reproduce">
-          <p class="finding-reproduce-label">Tái tạo</p>
+          <p class="finding-reproduce-label">${escapeHtml(t("table.reproduce"))}</p>
           <ol>${steps.map((s) => `<li><code>${escapeHtml(wrapReportLines(s, 120))}</code></li>`).join("")}</ol>
         </div>`
       : "";
@@ -315,13 +409,14 @@
             <td class="col-result">${formatFindingResult(f)}</td>
             <td class="col-recommend">${escapeHtml(wrapReportLines(f.recommendation || "—", 72))}</td>
           </tr>`).join("")
-      : `<tr><td colspan="5">Không có finding.</td></tr>`;
+      : `<tr><td colspan="5">${escapeHtml(t("report.noFindings"))}</td></tr>`;
 
     const when = formatWhen(scan.completedAt || scan.createdAt || new Date().toISOString());
-    const httpsText = scan.hasHttps == null ? "—" : (scan.hasHttps ? "Có" : "Không");
+    const httpsText = scan.hasHttps == null ? "—" : (scan.hasHttps ? t("report.yes") : t("report.no"));
+    const lang = I18n?.getLocale?.() || "vi";
 
     return `<!DOCTYPE html>
-<html lang="vi">
+<html lang="${escapeHtml(lang)}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -380,48 +475,48 @@
         <h1>${escapeHtml(report?.reportTitle || "Technical Report")}</h1>
         <p class="lede">${escapeHtml(wrapReportLines(scan.targetUrl || "", 100))}</p>
         <p class="risk-legend">
-          <span class="risk-legend-title">Cách đọc Risk</span>
+          <span class="risk-legend-title">${escapeHtml(t("risk.legendTitle"))}</span>
           <span class="risk-legend-scale">
-            <span class="sev-high">≥ 70: High</span>
-            <span class="sev-medium">40–69: Medium</span>
-            <span class="sev-low">&lt; 40: Low</span>
+            <span class="sev-high">${escapeHtml(t("risk.high"))}</span>
+            <span class="sev-medium">${escapeHtml(t("risk.medium"))}</span>
+            <span class="sev-low">${escapeHtml(t("risk.low"))}</span>
           </span>
-          <span>Điểm = tổng finding (High +25, Medium +12, Low +5, Info +0), tối đa 100. Điểm càng thấp càng tốt — 0/100 an toàn nhất, 100/100 rủi ro cao nhất.</span>
+          <span>${escapeHtml(t("risk.formula"))}</span>
         </p>
-        <p class="muted">Xuất lúc ${escapeHtml(when)} · Status: ${escapeHtml(scan.status || "—")}</p>
+        <p class="muted">${escapeHtml(t("export.exportedAt"))} ${escapeHtml(when)} · Status: ${escapeHtml(scan.status || "—")}</p>
       </div>
       <div class="risk">
-        <span class="muted">Risk</span>
+        <span class="muted">${escapeHtml(t("report.risk"))}</span>
         <strong class="${severityClass(report?.riskLevel)}">${escapeHtml(report?.riskLevel || "—")}</strong>
         <span class="muted">${escapeHtml(String(report?.riskScore ?? "—"))}/100</span>
       </div>
     </header>
 
     <section class="block">
-      <h2>Trạng thái scan</h2>
+      <h2>${escapeHtml(t("report.statusTitle"))}</h2>
       <p>${escapeHtml(wrapReportLines(scan.errorMessage || scan.summary || "—", 110))}</p>
       <dl class="metrics">
-        <div><dt>HTTP</dt><dd>${escapeHtml(String(scan.httpStatusCode ?? "—"))}</dd></div>
-        <div><dt>Thời gian</dt><dd>${escapeHtml(scan.responseTimeMs != null ? `${scan.responseTimeMs} ms` : "—")}</dd></div>
-        <div><dt>HTTPS</dt><dd>${escapeHtml(httpsText)}</dd></div>
-        <div><dt>Server</dt><dd>${escapeHtml(wrapReportLines(scan.serverHeader || "—", 40))}</dd></div>
+        <div><dt>${escapeHtml(t("report.metricHttp"))}</dt><dd>${escapeHtml(String(scan.httpStatusCode ?? "—"))}</dd></div>
+        <div><dt>${escapeHtml(t("report.metricTime"))}</dt><dd>${escapeHtml(scan.responseTimeMs != null ? `${scan.responseTimeMs} ms` : "—")}</dd></div>
+        <div><dt>${escapeHtml(t("report.metricHttps"))}</dt><dd>${escapeHtml(httpsText)}</dd></div>
+        <div><dt>${escapeHtml(t("report.metricServer"))}</dt><dd>${escapeHtml(wrapReportLines(scan.serverHeader || "—", 40))}</dd></div>
       </dl>
     </section>
 
     <section class="block">
-      <p class="executive-summary-line"><strong>Executive summary</strong> ${escapeHtml(wrapReportLines(report?.executiveSummary || "—", 120))}</p>
+      <p class="executive-summary-line"><strong>${escapeHtml(t("report.execLabel"))}</strong> ${escapeHtml(wrapReportLines(report?.executiveSummary || "—", 120))}</p>
     </section>
 
     <section class="block">
-      <h2>Findings</h2>
+      <h2>${escapeHtml(t("report.findings"))}</h2>
       <table>
         <thead>
           <tr>
-            <th class="col-index">Index</th>
-            <th class="col-function">Function</th>
-            <th class="col-tool">Tool</th>
-            <th class="col-result">Result</th>
-            <th class="col-recommend">Recommend</th>
+            <th class="col-index">${escapeHtml(t("table.index"))}</th>
+            <th class="col-function">${escapeHtml(t("table.function"))}</th>
+            <th class="col-tool">${escapeHtml(t("table.tool"))}</th>
+            <th class="col-result">${escapeHtml(t("table.result"))}</th>
+            <th class="col-recommend">${escapeHtml(t("table.recommend"))}</th>
           </tr>
         </thead>
         <tbody>${findingsRows}</tbody>
@@ -532,11 +627,11 @@
     fillEl.style.width = `${pct}%`;
     pctEl.textContent = `${pct}%`;
     labelEl.textContent = status === "Queued" || status === "pending"
-      ? "Đang xếp hàng…"
-      : "Đang scan…";
+      ? t("report.queued")
+      : t("report.scanning");
     summaryEl.textContent = scan.report?.executiveSummary
       ? wrapReportLines(scan.report.executiveSummary, 120)
-      : "Security Report đang được tạo — vui lòng chờ trong giây lát.";
+      : t("report.creating");
   }
 
   function renderReport(scan) {
@@ -547,16 +642,24 @@
     badge.textContent = scan.status === "pending" ? "Queued" : (scan.status || "Queued");
     badge.className = "badge " + statusClass(scan.status === "pending" ? "Queued" : scan.status);
     document.getElementById("status-summary").textContent =
-      wrapReportLines(scan.errorMessage || scan.summary || "Đang xử lý Security Report…", 110);
+      wrapReportLines(scan.errorMessage || scan.summary || t("report.processing"), 110);
     document.getElementById("metric-http").textContent = scan.httpStatusCode ?? "—";
     document.getElementById("metric-time").textContent =
       scan.responseTimeMs != null ? `${scan.responseTimeMs} ms` : "—";
     document.getElementById("metric-https").textContent =
-      scan.hasHttps == null ? "—" : (scan.hasHttps ? "Có" : "Không");
+      scan.hasHttps == null ? "—" : (scan.hasHttps ? t("report.yes") : t("report.no"));
     document.getElementById("metric-server").textContent = wrapReportLines(scan.serverHeader || "—", 40);
 
     updateScanProgressUi(scan);
     if (isScanInProgress(scan.status)) startProgressTicker();
+    setStopVisible(isScanInProgress(scan.status) && activeScanId && activeScanId !== "pending");
+    if (isScanInProgress(scan.status)) {
+      scanBtn.disabled = true;
+      scanBtn.textContent = t("home.scanning");
+    } else {
+      scanBtn.disabled = false;
+      scanBtn.textContent = t("home.scan");
+    }
 
     const report = scan.report;
     if (!report) {
@@ -564,11 +667,10 @@
       document.getElementById("risk-level").className = "";
       document.getElementById("risk-score").textContent = "—/100";
       if (!isScanInProgress(scan.status)) {
-        document.getElementById("executive-summary").textContent =
-          "Security Report đang được tạo theo cấu hình đã lưu…";
+        document.getElementById("executive-summary").textContent = t("report.creating");
       }
       document.getElementById("findings-list").innerHTML =
-        "<p class='muted'>Findings sẽ hiển thị khi scan hoàn tất.</p>";
+        `<p class='muted'>${escapeHtml(t("report.findingsPending"))}</p>`;
       setExportEnabled(false);
       return;
     }
@@ -583,7 +685,7 @@
 
     const findings = report.findings || [];
     if (!findings.length) {
-      document.getElementById("findings-list").innerHTML = "<p class='muted'>Không có finding.</p>";
+      document.getElementById("findings-list").innerHTML = `<p class='muted'>${escapeHtml(t("report.noFindings"))}</p>`;
       return;
     }
 
@@ -591,11 +693,11 @@
       <table class="findings-table">
         <thead>
           <tr>
-            <th scope="col" class="col-index">Index</th>
-            <th scope="col" class="col-function">Function</th>
-            <th scope="col" class="col-tool">Tool</th>
-            <th scope="col" class="col-result">Result</th>
-            <th scope="col" class="col-recommend">Recommend</th>
+            <th scope="col" class="col-index">${escapeHtml(t("table.index"))}</th>
+            <th scope="col" class="col-function">${escapeHtml(t("table.function"))}</th>
+            <th scope="col" class="col-tool">${escapeHtml(t("table.tool"))}</th>
+            <th scope="col" class="col-result">${escapeHtml(t("table.result"))}</th>
+            <th scope="col" class="col-recommend">${escapeHtml(t("table.recommend"))}</th>
           </tr>
         </thead>
         <tbody>
@@ -636,7 +738,7 @@
       id: scanId,
       targetUrl: "",
       status: "Queued",
-      summary: "Đang tải Security Report…",
+      summary: t("report.processing"),
       report: null,
     });
     startPolling(scanId);
@@ -652,6 +754,18 @@
     if (!link) return;
     event.preventDefault();
     showRight("history");
+  });
+
+  I18n?.onChange(async () => {
+    I18n.applyDom();
+    await loadCatalog();
+    if (rightView === "config") showRight("config");
+    else if (rightView === "history") showRight("history");
+    else if (rightView === "report" && activeScanId && activeScanId !== "pending") {
+      try { await refreshReport(); } catch { /* ignore */ }
+    } else if (lastScan) {
+      renderReport(lastScan);
+    }
   });
 
   const params = new URLSearchParams(window.location.search);

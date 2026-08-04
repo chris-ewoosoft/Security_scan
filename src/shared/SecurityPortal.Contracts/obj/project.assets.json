@@ -597,7 +597,7 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget": {},
+    "C:\\Users\\Chris\\.nuget\\packages\\": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
@@ -606,7 +606,7 @@
       "projectUniqueName": "D:\\Security Portal\\src\\shared\\SecurityPortal.Contracts\\SecurityPortal.Contracts.csproj",
       "projectName": "SecurityPortal.Contracts",
       "projectPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Contracts\\SecurityPortal.Contracts.csproj",
-      "packagesPath": "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget",
+      "packagesPath": "C:\\Users\\Chris\\.nuget\\packages\\",
       "outputPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Contracts\\obj\\",
       "projectStyle": "PackageReference",
       "centralPackageVersionsManagementEnabled": true,

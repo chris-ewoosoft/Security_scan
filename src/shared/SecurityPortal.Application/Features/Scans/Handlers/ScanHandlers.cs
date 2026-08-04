@@ -37,7 +37,7 @@ public class GetWebsiteScanQueryHandler(IWebsiteScanRepository scanRepository)
     {
         var scan = await scanRepository.GetByIdAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException(nameof(WebsiteScan), request.Id);
-        return WebsiteScanMappings.ToDto(scan);
+        return WebsiteScanMappings.ToDto(scan, request.Lang);
     }
 }
 
@@ -49,14 +49,14 @@ public class ListRecentWebsiteScansQueryHandler(IWebsiteScanRepository scanRepos
         CancellationToken cancellationToken)
     {
         var scans = await scanRepository.GetRecentAsync(Math.Clamp(request.Take, 1, 50), cancellationToken);
-        return scans.Select(WebsiteScanMappings.ToDto).ToList();
+        return scans.Select(scan => WebsiteScanMappings.ToDto(scan, request.Lang)).ToList();
     }
 }
 
 public class GetScanCatalogQueryHandler : IRequestHandler<GetScanCatalogQuery, ScanCatalogDto>
 {
     public Task<ScanCatalogDto> Handle(GetScanCatalogQuery request, CancellationToken cancellationToken) =>
-        Task.FromResult(WebsiteScanMappings.ToCatalogDto());
+        Task.FromResult(WebsiteScanMappings.ToCatalogDto(request.Lang));
 }
 
 public class DeleteWebsiteScansCommandHandler(IWebsiteScanRepository scanRepository)
@@ -76,5 +76,40 @@ public class DeleteWebsiteScansCommandHandler(IWebsiteScanRepository scanReposit
 
         var deleted = await scanRepository.DeleteByIdsAsync(ids, cancellationToken);
         return new DeleteWebsiteScansResultDto(deleted);
+    }
+}
+
+public class CancelWebsiteScanCommandHandler(
+    IWebsiteScanRepository scanRepository,
+    IScanAbortSignal abortSignal)
+    : IRequestHandler<CancelWebsiteScanCommand, WebsiteScanDto>
+{
+    public async Task<WebsiteScanDto> Handle(CancelWebsiteScanCommand request, CancellationToken cancellationToken)
+    {
+        var scan = await scanRepository.GetByIdAsync(request.Id, cancellationToken)
+            ?? throw new NotFoundException(nameof(WebsiteScan), request.Id);
+
+        if (scan.Status == ScanStatus.Cancelled)
+            return WebsiteScanMappings.ToDto(scan);
+
+        if (scan.Status is ScanStatus.Completed or ScanStatus.Failed)
+            throw new DomainException("Only queued or running scans can be stopped.");
+
+        // Abort in-flight work first so HTTP/TCP loops stop promptly.
+        abortSignal.Abort(request.Id);
+
+        await scanRepository.TryCancelAsync(
+            request.Id,
+            "Scan cancelled by user.",
+            cancellationToken);
+
+        var refreshed = await scanRepository.GetByIdAsNoTrackingAsync(request.Id, cancellationToken)
+            ?? throw new NotFoundException(nameof(WebsiteScan), request.Id);
+
+        // Processor may have persisted Cancelled after Abort; treat as success.
+        if (refreshed.Status == ScanStatus.Cancelled)
+            return WebsiteScanMappings.ToDto(refreshed);
+
+        throw new DomainException("Only queued or running scans can be stopped.");
     }
 }
