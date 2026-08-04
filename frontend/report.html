@@ -2,72 +2,19 @@
 <html lang="vi">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Security Report — Security Portal</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Chuyển tới lịch sử…</title>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("id");
+    window.location.replace(id ? `/history.html?id=${encodeURIComponent(id)}` : "/history.html");
+  </script>
 </head>
 <body>
-  <div class="atmosphere" aria-hidden="true"></div>
-  <div class="grid-glow" aria-hidden="true"></div>
-
-  <header class="topbar">
-    <a class="brand" href="/">Security Portal</a>
-    <nav>
-      <a href="/">Scan mới</a>
-      <a id="reconfig-link" href="/configure.html">Cấu hình lại</a>
-    </nav>
-  </header>
-
-  <main class="page">
-    <p class="eyebrow">Bước 3 / 3 · Security report</p>
-    <div class="report-hero">
-      <div>
-        <h1 class="page-title" id="report-title">Đang tải báo cáo…</h1>
-        <p class="lede" id="report-target"></p>
-      </div>
-      <div class="risk-panel">
-        <span class="muted">Risk</span>
-        <strong id="risk-level">—</strong>
-        <span id="risk-score" class="muted">—/100</span>
-      </div>
-    </div>
-
-    <section class="config-block">
-      <h2>Trạng thái scan</h2>
-      <div class="status-head">
-        <span id="status-badge" class="badge">Queued</span>
-        <span id="status-summary" class="summary"></span>
-      </div>
-      <dl class="metrics compact">
-        <div><dt>HTTP</dt><dd id="metric-http">—</dd></div>
-        <div><dt>Thời gian</dt><dd id="metric-time">—</dd></div>
-        <div><dt>HTTPS</dt><dd id="metric-https">—</dd></div>
-        <div><dt>Server</dt><dd id="metric-server">—</dd></div>
-      </dl>
-    </section>
-
-    <section class="config-block">
-      <h2>Cấu hình đã chọn</h2>
-      <div class="chips" id="selected-checks"></div>
-      <div class="chips tools" id="selected-tools"></div>
-      <p class="muted" id="selected-report"></p>
-    </section>
-
-    <section class="config-block">
-      <h2>Executive summary</h2>
-      <p id="executive-summary" class="summary">Đang chờ kết quả…</p>
-    </section>
-
-    <section class="config-block">
-      <h2>Findings</h2>
-      <div id="findings-list" class="findings"></div>
-    </section>
-  </main>
-
-  <script src="/api-client.js"></script>
-  <script src="/report.js"></script>
+  <p>Chuyển tới <a id="go" href="/history.html">Lịch sử</a>…</p>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("id");
+    document.getElementById("go").href = id ? `/history.html?id=${encodeURIComponent(id)}` : "/history.html";
+  </script>
 </body>
 </html>

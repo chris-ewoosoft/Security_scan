@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lịch sử — Security Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-history">
+  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="grid-glow" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/">Security Portal</a>
+    <nav class="main-nav">
+      <a class="nav-item" href="/">Trang chủ</a>
+      <a class="nav-item" href="/configure.html">Cấu hình</a>
+      <a class="nav-item is-active" href="/history.html">Lịch sử</a>
+    </nav>
+  </header>
+
+  <main class="page history-page">
+    <p class="eyebrow">Tra cứu lại</p>
+    <h1 class="page-title">Lịch sử scan &amp; báo cáo</h1>
+    <p class="lede">Xem lại các lần scan trước. Chọn một mục để mở Security Report tương ứng.</p>
+
+    <section class="config-block history-list-block">
+      <div class="block-head">
+        <h2>Danh sách scan</h2>
+        <button type="button" class="linkish" id="refresh-btn">Làm mới</button>
+      </div>
+      <p id="history-error" class="form-error" hidden></p>
+      <ul id="history-list" class="recent-list history-list"></ul>
+    </section>
+
+    <section id="report-panel" class="home-report report-page history-report" hidden>
+      <div class="report-hero">
+        <div>
+          <p class="eyebrow">Security Report</p>
+          <h2 class="page-title" id="report-title">Chọn một scan để xem</h2>
+          <p class="lede" id="report-target"></p>
+        </div>
+        <div class="risk-panel">
+          <span class="muted">Risk</span>
+          <strong id="risk-level">—</strong>
+          <span id="risk-score" class="muted">—/100</span>
+        </div>
+      </div>
+
+      <section class="config-block">
+        <h2>Trạng thái scan</h2>
+        <div class="status-head">
+          <span id="status-badge" class="badge">—</span>
+          <span id="status-summary" class="summary"></span>
+        </div>
+        <dl class="metrics compact">
+          <div><dt>HTTP</dt><dd id="metric-http">—</dd></div>
+          <div><dt>Thời gian</dt><dd id="metric-time">—</dd></div>
+          <div><dt>HTTPS</dt><dd id="metric-https">—</dd></div>
+          <div><dt>Server</dt><dd id="metric-server">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="config-block">
+        <h2>Executive summary</h2>
+        <p id="executive-summary" class="summary">Chọn một scan trong danh sách để xem báo cáo.</p>
+      </section>
+
+      <section class="config-block">
+        <h2>Findings</h2>
+        <div id="findings-list" class="findings-table-wrap">
+          <p class="muted">Chưa chọn scan.</p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/api-client.js?v=3"></script>
+  <script src="/history.js?v=1"></script>
+</body>
+</html>

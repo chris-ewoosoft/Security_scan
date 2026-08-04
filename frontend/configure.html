@@ -3,35 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cấu hình scan — Security Portal</title>
+  <title>Cấu hình — Security Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
+<body class="page-config">
   <div class="atmosphere" aria-hidden="true"></div>
   <div class="grid-glow" aria-hidden="true"></div>
 
   <header class="topbar">
     <a class="brand" href="/">Security Portal</a>
-    <nav>
-      <a href="/">Trang chủ</a>
+    <nav class="main-nav">
+      <a class="nav-item" href="/">Trang chủ</a>
+      <a class="nav-item is-active" href="/configure.html">Cấu hình</a>
+      <a class="nav-item" href="/history.html">Lịch sử</a>
     </nav>
   </header>
 
-  <main class="page">
-    <p class="eyebrow">Bước 2 / 3</p>
-    <h1 class="page-title">Cấu hình security scan</h1>
-    <p class="lede">Chọn vấn đề cần kiểm tra, tool tương ứng và loại security report sẽ được tạo.</p>
+  <main class="page config-page">
+    <p class="eyebrow">Cài đặt tái sử dụng</p>
+    <h1 class="page-title">Cấu hình scan</h1>
+    <p class="lede">Chỉnh vấn đề security, tool và loại báo cáo tại đây. Mỗi lần tích chọn sẽ <strong>tự lưu</strong> trên trình duyệt và áp dụng cho mọi lần scan trên Trang chủ.</p>
+
+    <div id="save-banner" class="save-banner">Đang tải cấu hình…</div>
 
     <form id="config-form" class="config-form">
-      <section class="config-block">
-        <h2>Mục tiêu</h2>
-        <label class="field-label" for="target-url">Website</label>
-        <input id="target-url" name="targetUrl" type="url" required spellcheck="false" />
-      </section>
-
       <section class="config-block">
         <div class="block-head">
           <h2>Vấn đề security</h2>
@@ -43,7 +41,7 @@
       <section class="config-block">
         <div class="block-head">
           <h2>Tools</h2>
-          <span class="muted">Tự gợi ý theo checks đã chọn; bạn có thể chỉnh lại</span>
+          <span class="muted">Tự gợi ý theo checks; chỉnh lại nếu cần — cũng tự lưu</span>
         </div>
         <div id="tools-list" class="option-grid"></div>
       </section>
@@ -56,13 +54,14 @@
       <p id="form-error" class="form-error" hidden></p>
 
       <div class="actions">
-        <a class="ghost-btn" href="/">Quay lại</a>
-        <button type="submit" id="start-btn">Bắt đầu scan</button>
+        <a class="ghost-btn" href="/">Về trang chủ</a>
+        <button type="button" id="save-btn">Lưu cấu hình</button>
       </div>
     </form>
   </main>
 
-  <script src="/api-client.js"></script>
-  <script src="/configure.js"></script>
+  <script src="/api-client.js?v=3"></script>
+  <script src="/config-store.js?v=3"></script>
+  <script src="/configure.js?v=4"></script>
 </body>
 </html>

@@ -3,54 +3,116 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Security Portal</title>
+  <title>Trang chủ — Security Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=6" />
 </head>
-<body>
+<body class="page-home">
   <div class="atmosphere" aria-hidden="true"></div>
   <div class="grid-glow" aria-hidden="true"></div>
 
   <header class="topbar">
     <a class="brand" href="/">Security Portal</a>
-    <nav>
-      <a href="#recent">Lịch sử</a>
-      <a href="/configure.html">Cấu hình</a>
+    <nav class="main-nav">
+      <a class="nav-item is-active" href="/">Trang chủ</a>
+      <a class="nav-item" href="/configure.html">Cấu hình</a>
+      <a class="nav-item" href="/history.html">Lịch sử</a>
     </nav>
   </header>
 
-  <main class="hero">
-    <p class="brand-mark">Security Portal</p>
-    <h1>Quét bảo mật website</h1>
-    <p class="lede">Nhập địa chỉ website, rồi chọn vấn đề security, tool và loại báo cáo trước khi chạy scan.</p>
+  <main class="home-split">
+    <section class="home-left" aria-label="Security Portal">
+      <p class="brand-mark">Security Portal</p>
+      <h1>Quét bảo mật website</h1>
+      <p class="lede">Nhập URL và chạy scan theo cấu hình đã lưu. Technical Report hiện bên phải sau khi scan.</p>
 
-    <form id="scan-form" class="scan-form" autocomplete="off">
-      <label class="sr-only" for="target-url">Địa chỉ website cần scan</label>
-      <div class="url-row">
-        <input
-          id="target-url"
-          name="targetUrl"
-          type="url"
-          inputmode="url"
-          placeholder="https://example.com"
-          required
-          spellcheck="false"
-        />
-        <button type="submit" id="scan-btn">Cấu hình scan</button>
+      <form id="scan-form" class="scan-form" autocomplete="off">
+        <label class="sr-only" for="target-url">Địa chỉ website cần scan</label>
+        <div class="url-row url-row-stack">
+          <input
+            id="target-url"
+            name="targetUrl"
+            type="text"
+            inputmode="url"
+            placeholder="https://example.com"
+            required
+            spellcheck="false"
+            autocomplete="url"
+          />
+          <button type="submit" id="scan-btn">Bắt đầu scan</button>
+        </div>
+        <p id="form-error" class="form-error" hidden></p>
+      </form>
+
+      <aside class="config-snapshot" id="config-snapshot">
+        <div>
+          <p class="snapshot-label">Cấu hình đang dùng</p>
+          <p id="config-summary" class="snapshot-text">Đang tải…</p>
+        </div>
+        <div class="snapshot-actions">
+          <a class="ghost-btn" href="/configure.html">Chỉnh cấu hình</a>
+          <a class="ghost-btn" href="/history.html">Lịch sử</a>
+        </div>
+      </aside>
+    </section>
+
+    <section class="home-right" aria-label="Technical Report">
+      <div id="report-placeholder" class="report-placeholder">
+        <p class="eyebrow">Technical Report</p>
+        <h2>Chưa có báo cáo</h2>
       </div>
-      <p class="hint">Bước tiếp theo: chọn checks / tools / report type</p>
-      <p id="form-error" class="form-error" hidden></p>
-    </form>
+
+      <div id="report-panel" class="home-report-panel" hidden>
+        <div class="report-hero">
+          <div>
+            <p class="eyebrow">Technical Report</p>
+            <h2 class="page-title" id="report-title">Technical Report</h2>
+            <p class="lede" id="report-target"></p>
+          </div>
+          <div class="risk-panel">
+            <span class="muted">Risk</span>
+            <strong id="risk-level">—</strong>
+            <span id="risk-score" class="muted">—/100</span>
+          </div>
+        </div>
+
+        <section class="config-block">
+          <h2>Trạng thái scan</h2>
+          <div class="status-head">
+            <span id="status-badge" class="badge">Queued</span>
+            <span id="status-summary" class="summary"></span>
+          </div>
+          <dl class="metrics compact">
+            <div><dt>HTTP</dt><dd id="metric-http">—</dd></div>
+            <div><dt>Thời gian</dt><dd id="metric-time">—</dd></div>
+            <div><dt>HTTPS</dt><dd id="metric-https">—</dd></div>
+            <div><dt>Server</dt><dd id="metric-server">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="config-block">
+          <h2>Executive summary</h2>
+          <p id="executive-summary" class="summary">Đang chờ kết quả…</p>
+        </section>
+
+        <section class="config-block">
+          <h2>Findings</h2>
+          <div id="findings-list" class="findings-table-wrap">
+            <p class="muted">Chưa có findings.</p>
+          </div>
+        </section>
+
+        <p class="history-link-note muted">
+          Lưu trong <a href="/history.html">Lịch sử</a> để xem lại sau.
+        </p>
+      </div>
+    </section>
   </main>
 
-  <section id="recent" class="recent">
-    <h2>Scan gần đây</h2>
-    <ul id="recent-list" class="recent-list"></ul>
-  </section>
-
-  <script src="/api-client.js"></script>
-  <script src="/home.js"></script>
+  <script src="/api-client.js?v=3"></script>
+  <script src="/config-store.js?v=3"></script>
+  <script src="/home.js?v=5"></script>
 </body>
 </html>
