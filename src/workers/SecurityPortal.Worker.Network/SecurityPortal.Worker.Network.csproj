@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <AssemblyName>SecurityPortal.Worker.Network</AssemblyName>
+    <RootNamespace>SecurityPortal.Worker.Network</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\shared\SecurityPortal.Application\SecurityPortal.Application.csproj" />
+    <ProjectReference Include="..\..\..\shared\SecurityPortal.Infrastructure\SecurityPortal.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\shared\SecurityPortal.Contracts\SecurityPortal.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MassTransit.RabbitMQ" />
+    <PackageReference Include="Serilog.AspNetCore" />
+  </ItemGroup>
+</Project>

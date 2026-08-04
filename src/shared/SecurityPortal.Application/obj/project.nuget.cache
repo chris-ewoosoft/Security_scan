@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "dgSpecHash": "37TqsObsprA=",
+  "success": true,
+  "projectFilePath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Application\\SecurityPortal.Application.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\automapper\\12.0.1\\automapper.12.0.1.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\automapper.extensions.microsoft.dependencyinjection\\12.0.1\\automapper.extensions.microsoft.dependencyinjection.12.0.1.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\fluentvalidation\\11.11.0\\fluentvalidation.11.11.0.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\fluentvalidation.dependencyinjectionextensions\\11.11.0\\fluentvalidation.dependencyinjectionextensions.11.11.0.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\mediatr\\12.4.1\\mediatr.12.4.1.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\mediatr.contracts\\2.0.1\\mediatr.contracts.2.0.1.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration\\9.0.7\\microsoft.extensions.configuration.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.abstractions\\9.0.7\\microsoft.extensions.configuration.abstractions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.binder\\9.0.7\\microsoft.extensions.configuration.binder.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.commandline\\9.0.7\\microsoft.extensions.configuration.commandline.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.environmentvariables\\9.0.7\\microsoft.extensions.configuration.environmentvariables.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.fileextensions\\9.0.7\\microsoft.extensions.configuration.fileextensions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.json\\9.0.7\\microsoft.extensions.configuration.json.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.configuration.usersecrets\\9.0.7\\microsoft.extensions.configuration.usersecrets.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.dependencyinjection\\9.0.7\\microsoft.extensions.dependencyinjection.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.dependencyinjection.abstractions\\9.0.7\\microsoft.extensions.dependencyinjection.abstractions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.diagnostics\\9.0.7\\microsoft.extensions.diagnostics.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.diagnostics.abstractions\\9.0.7\\microsoft.extensions.diagnostics.abstractions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.fileproviders.abstractions\\9.0.7\\microsoft.extensions.fileproviders.abstractions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.fileproviders.physical\\9.0.7\\microsoft.extensions.fileproviders.physical.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.filesystemglobbing\\9.0.7\\microsoft.extensions.filesystemglobbing.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.hosting\\9.0.7\\microsoft.extensions.hosting.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.hosting.abstractions\\9.0.7\\microsoft.extensions.hosting.abstractions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging\\9.0.7\\microsoft.extensions.logging.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging.abstractions\\9.0.7\\microsoft.extensions.logging.abstractions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging.configuration\\9.0.7\\microsoft.extensions.logging.configuration.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging.console\\9.0.7\\microsoft.extensions.logging.console.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging.debug\\9.0.7\\microsoft.extensions.logging.debug.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging.eventlog\\9.0.7\\microsoft.extensions.logging.eventlog.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.logging.eventsource\\9.0.7\\microsoft.extensions.logging.eventsource.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.options\\9.0.7\\microsoft.extensions.options.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.options.configurationextensions\\9.0.7\\microsoft.extensions.options.configurationextensions.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\microsoft.extensions.primitives\\9.0.7\\microsoft.extensions.primitives.9.0.7.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\2967c30c4bb0a3c76effc7e1f6dcdab8\\nuget\\system.diagnostics.eventlog\\9.0.7\\system.diagnostics.eventlog.9.0.7.nupkg.sha512"
+  ],
+  "logs": [
+    {
+      "code": "NU1903",
+      "level": "Warning",
+      "message": "Package 'AutoMapper' 12.0.1 has a known high severity vulnerability, https://github.com/advisories/GHSA-rvv3-g6hj-g44x",
+      "projectPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Application\\SecurityPortal.Application.csproj",
+      "warningLevel": 1,
+      "filePath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Application\\SecurityPortal.Application.csproj",
+      "libraryId": "AutoMapper",
+      "targetGraphs": [
+        "net10.0"
+      ]
+    }
+  ]
+}

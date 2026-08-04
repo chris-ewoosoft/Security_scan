@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cấu hình scan — Security Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="grid-glow" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/">Security Portal</a>
+    <nav>
+      <a href="/">Trang chủ</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    <p class="eyebrow">Bước 2 / 3</p>
+    <h1 class="page-title">Cấu hình security scan</h1>
+    <p class="lede">Chọn vấn đề cần kiểm tra, tool tương ứng và loại security report sẽ được tạo.</p>
+
+    <form id="config-form" class="config-form">
+      <section class="config-block">
+        <h2>Mục tiêu</h2>
+        <label class="field-label" for="target-url">Website</label>
+        <input id="target-url" name="targetUrl" type="url" required spellcheck="false" />
+      </section>
+
+      <section class="config-block">
+        <div class="block-head">
+          <h2>Vấn đề security</h2>
+          <button type="button" class="linkish" id="select-default-checks">Chọn mặc định</button>
+        </div>
+        <div id="checks-list" class="option-grid"></div>
+      </section>
+
+      <section class="config-block">
+        <div class="block-head">
+          <h2>Tools</h2>
+          <span class="muted">Tự gợi ý theo checks đã chọn; bạn có thể chỉnh lại</span>
+        </div>
+        <div id="tools-list" class="option-grid"></div>
+      </section>
+
+      <section class="config-block">
+        <h2>Security report</h2>
+        <div id="reports-list" class="report-list"></div>
+      </section>
+
+      <p id="form-error" class="form-error" hidden></p>
+
+      <div class="actions">
+        <a class="ghost-btn" href="/">Quay lại</a>
+        <button type="submit" id="start-btn">Bắt đầu scan</button>
+      </div>
+    </form>
+  </main>
+
+  <script src="/api-client.js"></script>
+  <script src="/configure.js"></script>
+</body>
+</html>

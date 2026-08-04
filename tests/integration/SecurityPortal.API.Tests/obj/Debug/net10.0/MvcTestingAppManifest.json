@@ -1,0 +1,7 @@
+{
+  "SecurityPortal.API, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "D:\\Security Portal\\src\\services\\SecurityPortal.API",
+  "SecurityPortal.Application, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "D:\\Security Portal\\src\\shared\\SecurityPortal.Application",
+  "SecurityPortal.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "D:\\Security Portal\\src\\shared\\SecurityPortal.Contracts",
+  "SecurityPortal.Domain, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "D:\\Security Portal\\src\\shared\\SecurityPortal.Domain",
+  "SecurityPortal.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "D:\\Security Portal\\src\\shared\\SecurityPortal.Infrastructure"
+}

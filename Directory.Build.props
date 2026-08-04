@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Company>SecurityPortal</Company>
+    <Authors>SecurityPortal</Authors>
+    <Copyright>Copyright © SecurityPortal 2024</Copyright>
+  </PropertyGroup>
+</Project>

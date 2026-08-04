@@ -1,0 +1,41 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using SecurityPortal.Application.Common.Interfaces;
+using SecurityPortal.Infrastructure.Persistence;
+
+namespace SecurityPortal.Infrastructure.Persistence;
+
+public sealed class UnitOfWork(ApplicationDbContext context) : IUnitOfWork
+{
+    private IDbContextTransaction? _currentTransaction;
+
+    public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+        await context.SaveChangesAsync(cancellationToken);
+
+    public async Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        _currentTransaction ??= await context.Database.BeginTransactionAsync(cancellationToken);
+    }
+
+    public async Task CommitTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction is null) return;
+        await _currentTransaction.CommitAsync(cancellationToken);
+        await _currentTransaction.DisposeAsync();
+        _currentTransaction = null;
+    }
+
+    public async Task RollbackTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction is null) return;
+        await _currentTransaction.RollbackAsync(cancellationToken);
+        await _currentTransaction.DisposeAsync();
+        _currentTransaction = null;
+    }
+
+    public void Dispose()
+    {
+        _currentTransaction?.Dispose();
+        context.Dispose();
+    }
+}

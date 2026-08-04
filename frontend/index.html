@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Security Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="grid-glow" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/">Security Portal</a>
+    <nav>
+      <a href="#recent">Lịch sử</a>
+      <a href="/configure.html">Cấu hình</a>
+    </nav>
+  </header>
+
+  <main class="hero">
+    <p class="brand-mark">Security Portal</p>
+    <h1>Quét bảo mật website</h1>
+    <p class="lede">Nhập địa chỉ website, rồi chọn vấn đề security, tool và loại báo cáo trước khi chạy scan.</p>
+
+    <form id="scan-form" class="scan-form" autocomplete="off">
+      <label class="sr-only" for="target-url">Địa chỉ website cần scan</label>
+      <div class="url-row">
+        <input
+          id="target-url"
+          name="targetUrl"
+          type="url"
+          inputmode="url"
+          placeholder="https://example.com"
+          required
+          spellcheck="false"
+        />
+        <button type="submit" id="scan-btn">Cấu hình scan</button>
+      </div>
+      <p class="hint">Bước tiếp theo: chọn checks / tools / report type</p>
+      <p id="form-error" class="form-error" hidden></p>
+    </form>
+  </main>
+
+  <section id="recent" class="recent">
+    <h2>Scan gần đây</h2>
+    <ul id="recent-list" class="recent-list"></ul>
+  </section>
+
+  <script src="/api-client.js"></script>
+  <script src="/home.js"></script>
+</body>
+</html>

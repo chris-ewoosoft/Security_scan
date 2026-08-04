@@ -1,0 +1,11 @@
+D:\Security Portal\src\shared\SecurityPortal.Domain\bin\Release\net10.0\SecurityPortal.Domain.deps.json
+D:\Security Portal\src\shared\SecurityPortal.Domain\bin\Release\net10.0\SecurityPortal.Domain.dll
+D:\Security Portal\src\shared\SecurityPortal.Domain\bin\Release\net10.0\SecurityPortal.Domain.pdb
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\SecurityPortal.Domain.GeneratedMSBuildEditorConfig.editorconfig
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\SecurityPortal.Domain.AssemblyInfoInputs.cache
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\SecurityPortal.Domain.AssemblyInfo.cs
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\SecurityPortal.Domain.csproj.CoreCompileInputs.cache
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\SecurityPortal.Domain.dll
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\refint\SecurityPortal.Domain.dll
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\SecurityPortal.Domain.pdb
+D:\Security Portal\src\shared\SecurityPortal.Domain\obj\Release\net10.0\ref\SecurityPortal.Domain.dll

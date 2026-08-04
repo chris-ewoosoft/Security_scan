@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <AssemblyName>SecurityPortal.AI</AssemblyName>
+    <RootNamespace>SecurityPortal.AI</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\shared\SecurityPortal.Application\SecurityPortal.Application.csproj" />
+    <ProjectReference Include="..\..\shared\SecurityPortal.Infrastructure\SecurityPortal.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\shared\SecurityPortal.Contracts\SecurityPortal.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MassTransit.RabbitMQ" />
+    <PackageReference Include="Azure.AI.OpenAI" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
+  </ItemGroup>
+</Project>

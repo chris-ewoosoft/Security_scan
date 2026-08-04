@@ -1,0 +1,69 @@
+window.SecurityPortalApi = (() => {
+  const candidates = ["/api/v1", "http://localhost:5000/api/v1"];
+
+  async function apiFetch(path, options = {}) {
+    let lastError = null;
+    for (const base of candidates) {
+      try {
+        const res = await fetch(`${base}${path}`, options);
+        if (res.status === 502 || res.status === 503 || res.status === 504) {
+          lastError = new Error(`API gateway error (${res.status})`);
+          continue;
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error("Không kết nối được API.");
+  }
+
+  function extractError(data) {
+    if (!data) return null;
+    if (data.detail) return data.detail;
+    if (data.errors) {
+      const first = Object.values(data.errors).flat()[0];
+      if (first) return first;
+    }
+    return null;
+  }
+
+  function normalizeUrl(value) {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return "";
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  }
+
+  function statusClass(status) {
+    if (status === "Running" || status === "Queued") return "is-running";
+    if (status === "Completed") return "is-completed";
+    if (status === "Failed") return "is-failed";
+    return "";
+  }
+
+  function severityClass(severity) {
+    const s = (severity || "").toLowerCase();
+    if (s === "high") return "sev-high";
+    if (s === "medium") return "sev-medium";
+    if (s === "low") return "sev-low";
+    return "sev-info";
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  function formatWhen(iso) {
+    try {
+      return new Date(iso).toLocaleString("vi-VN");
+    } catch {
+      return iso;
+    }
+  }
+
+  return { apiFetch, extractError, normalizeUrl, statusClass, severityClass, escapeHtml, formatWhen };
+})();
