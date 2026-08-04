@@ -34,6 +34,52 @@
   const navHome = document.querySelector('[data-nav="home"]');
   const navConfig = document.querySelector('[data-nav="config"]');
   const navHistory = document.querySelector('[data-nav="history"]');
+  const authEnabled = document.getElementById("auth-enabled");
+  const authFields = document.getElementById("auth-fields");
+  const authType = document.getElementById("auth-type");
+  const authLoginUrl = document.getElementById("auth-login-url");
+  const authUsername = document.getElementById("auth-username");
+  const authPassword = document.getElementById("auth-password");
+  const authClinic = document.getElementById("auth-clinic");
+  const authSuccess = document.getElementById("auth-success");
+
+  function syncAuthFields() {
+    if (!authFields) return;
+    authFields.hidden = !authEnabled?.checked;
+    const isGraphql = (authType?.value || "").toLowerCase() === "graphql";
+    const hint = document.getElementById("auth-graphql-hint");
+    if (hint) hint.hidden = !isGraphql;
+    if (authLoginUrl) {
+      authLoginUrl.placeholder = isGraphql
+        ? "https://api.example.com/graphql"
+        : "https://example.com/login";
+    }
+  }
+
+  authEnabled?.addEventListener("change", syncAuthFields);
+  authType?.addEventListener("change", syncAuthFields);
+  syncAuthFields();
+
+  function buildAuthPayload() {
+    if (!authEnabled?.checked) return null;
+    const username = (authUsername?.value || "").trim();
+    const password = authPassword?.value || "";
+    if (!username || !password) {
+      throw new Error(t("auth.required"));
+    }
+    const type = (authType?.value || "form").trim().toLowerCase();
+    const loginUrl = (authLoginUrl?.value || "").trim();
+    if (type === "graphql" && !loginUrl) {
+      throw new Error(t("auth.graphqlLoginRequired"));
+    }
+    const payload = { type, username, password };
+    if (loginUrl) payload.loginUrl = loginUrl;
+    const clinicId = (authClinic?.value || "").trim();
+    if (clinicId) payload.clinicId = clinicId;
+    const success = (authSuccess?.value || "").trim();
+    if (success) payload.successUrlContains = success;
+    return payload;
+  }
 
   let catalog = null;
   let pollTimer = null;
@@ -272,7 +318,22 @@
       return;
     }
 
+    let auth;
+    try {
+      auth = buildAuthPayload();
+    } catch (authErr) {
+      formError.hidden = false;
+      formError.textContent = authErr.message || t("auth.required");
+      authUsername?.focus();
+      return;
+    }
+
     const config = getScanConfig();
+    const checks = [...(config.checks || [])];
+    if (auth && !checks.some((c) => String(c).toLowerCase() === "authenticated-scan")) {
+      checks.push("authenticated-scan");
+    }
+
     scanBtn.disabled = true;
     scanBtn.textContent = t("home.scanning");
     setStopVisible(false);
@@ -283,20 +344,23 @@
       status: "Queued",
       summary: t("report.processing"),
       reportType: config.reportType,
-      configuration: config,
+      configuration: { ...config, checks, auth: auth ? { type: auth.type, enabled: true } : null },
       report: null,
     });
 
     try {
+      const body = {
+        targetUrl,
+        checks,
+        tools: config.tools,
+        reportType: config.reportType,
+      };
+      if (auth) body.auth = auth;
+
       const res = await apiFetch("/scans", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          targetUrl,
-          checks: config.checks,
-          tools: config.tools,
-          reportType: config.reportType,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

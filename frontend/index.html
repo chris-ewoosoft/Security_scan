@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=25" />
+  <link rel="stylesheet" href="/styles.css?v=27" />
 </head>
 <body class="page-home">
   <div class="atmosphere" aria-hidden="true"></div>
@@ -45,6 +45,47 @@
             spellcheck="false"
             autocomplete="url"
           />
+          <div class="auth-scan-box">
+            <label class="auth-toggle">
+              <input type="checkbox" id="auth-enabled" />
+              <span data-i18n="auth.enable">Scan với đăng nhập</span>
+            </label>
+            <div id="auth-fields" class="auth-fields" hidden>
+              <div class="auth-row">
+                <label for="auth-type" data-i18n="auth.type">Loại</label>
+                <select id="auth-type">
+                  <option value="form" data-i18n="auth.typeForm">Form login</option>
+                  <option value="basic" data-i18n="auth.typeBasic">HTTP Basic</option>
+                  <option value="graphql" data-i18n="auth.typeGraphql">GraphQL API</option>
+                </select>
+              </div>
+              <div class="auth-row">
+                <label for="auth-login-url" data-i18n="auth.loginUrl">Login URL (tuỳ chọn)</label>
+                <input id="auth-login-url" type="text" placeholder="https://example.com/login" autocomplete="off" />
+                <p class="auth-hint" data-i18n="auth.graphqlHint" hidden id="auth-graphql-hint">
+                  Với GraphQL: dán endpoint API (ví dụ …/graphql), không phải trang /login.
+                </p>
+              </div>
+              <div class="auth-row auth-row-2">
+                <div>
+                  <label for="auth-clinic" data-i18n="auth.clinicId">Clinic / Hospital ID</label>
+                  <input id="auth-clinic" type="text" autocomplete="organization" placeholder="vatech" />
+                </div>
+                <div>
+                  <label for="auth-username" data-i18n="auth.username">Username</label>
+                  <input id="auth-username" type="text" autocomplete="username" />
+                </div>
+              </div>
+              <div class="auth-row">
+                <label for="auth-password" data-i18n="auth.password">Password</label>
+                <input id="auth-password" type="password" autocomplete="current-password" />
+              </div>
+              <div class="auth-row">
+                <label for="auth-success" data-i18n="auth.success">URL sau đăng nhập chứa (tuỳ chọn)</label>
+                <input id="auth-success" type="text" placeholder="/dashboard" autocomplete="off" />
+              </div>
+            </div>
+          </div>
           <div class="scan-actions">
             <button type="submit" id="scan-btn" data-i18n="home.scan">Bắt đầu scan</button>
             <button type="button" id="stop-scan-btn" class="ghost-btn danger-btn" hidden data-i18n="home.stop">
@@ -154,11 +195,11 @@
     </section>
   </main>
 
-  <script src="/i18n.js?v=3"></script>
+  <script src="/i18n.js?v=6"></script>
   <script src="/api-client.js?v=7"></script>
   <script src="/config-store.js?v=3"></script>
   <script src="/configure.js?v=9"></script>
   <script src="/history.js?v=6"></script>
-  <script src="/home.js?v=21"></script>
+  <script src="/home.js?v=24"></script>
 </body>
 </html>

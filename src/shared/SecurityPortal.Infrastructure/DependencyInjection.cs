@@ -34,6 +34,7 @@ public static class DependencyInjection
         // Auth services
         services.AddSingleton<IJwtService, JwtService>();
         services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
+        services.AddSingleton<IScanSecretProtector, AesScanSecretProtector>();
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUserService>();
 

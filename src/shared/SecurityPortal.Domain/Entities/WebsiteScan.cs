@@ -145,6 +145,7 @@ public sealed class ScanConfiguration
     public List<string> Checks { get; set; } = [];
     public List<string> Tools { get; set; } = [];
     public string ReportType { get; set; } = ScanCatalog.DefaultReportType;
+    public ScanAuthConfiguration? Auth { get; set; }
 
     public static ScanConfiguration CreateDefault()
     {
@@ -187,5 +188,68 @@ public sealed class ScanConfiguration
 
         if (string.IsNullOrWhiteSpace(ReportType) || !ScanCatalog.ValidReportIds.Contains(ReportType))
             throw new DomainException("Select a valid security report type.");
+
+        Auth?.Validate();
+    }
+}
+
+public sealed class ScanAuthConfiguration
+{
+    public const string TypeNone = "none";
+    public const string TypeForm = "form";
+    public const string TypeBasic = "basic";
+    public const string TypeGraphql = "graphql";
+
+    public string Type { get; set; } = TypeNone;
+    public string? LoginUrl { get; set; }
+    public string? Username { get; set; }
+    /// <summary>AES-GCM ciphertext. Never expose via API DTO.</summary>
+    public string? PasswordCipher { get; set; }
+    public string? SuccessUrlContains { get; set; }
+    public string? UsernameField { get; set; }
+    public string? PasswordField { get; set; }
+    /// <summary>Optional clinic / hospital / tenant id for multi-tenant login forms.</summary>
+    public string? ClinicId { get; set; }
+
+    public bool IsEnabled =>
+        Type is TypeForm or TypeBasic or TypeGraphql
+        && !string.IsNullOrWhiteSpace(Username)
+        && !string.IsNullOrWhiteSpace(PasswordCipher);
+
+    public void Validate()
+    {
+        var type = (Type ?? TypeNone).Trim().ToLowerInvariant();
+        Type = type;
+        if (type is TypeNone or "")
+        {
+            Type = TypeNone;
+            return;
+        }
+
+        if (type is not (TypeForm or TypeBasic or TypeGraphql))
+            throw new DomainException("Auth type must be none, form, basic, or graphql.");
+
+        if (string.IsNullOrWhiteSpace(Username))
+            throw new DomainException("Username is required for authenticated scans.");
+
+        if (string.IsNullOrWhiteSpace(PasswordCipher))
+            throw new DomainException("Password is required for authenticated scans.");
+
+        if (type is TypeGraphql && string.IsNullOrWhiteSpace(LoginUrl))
+            throw new DomainException("GraphQL endpoint URL is required for graphql auth.");
+
+        if (!string.IsNullOrWhiteSpace(LoginUrl))
+        {
+            var login = LoginUrl.Trim();
+            if (!login.Contains("://", StringComparison.Ordinal))
+                login = "https://" + login;
+            if (!Uri.TryCreate(login, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new DomainException("Login URL must be a valid http:// or https:// address.");
+            }
+
+            LoginUrl = uri.ToString();
+        }
     }
 }

@@ -7,7 +7,18 @@ public record StartWebsiteScanRequest(
     string TargetUrl,
     IReadOnlyList<string>? Checks = null,
     IReadOnlyList<string>? Tools = null,
-    string? ReportType = null);
+    string? ReportType = null,
+    StartScanAuthRequest? Auth = null);
+
+public record StartScanAuthRequest(
+    string? Type = null,
+    string? LoginUrl = null,
+    string? Username = null,
+    string? Password = null,
+    string? SuccessUrlContains = null,
+    string? UsernameField = null,
+    string? PasswordField = null,
+    string? ClinicId = null);
 
 public record ScanCatalogDto(
     IReadOnlyList<ScanCheckDto> Checks,
@@ -75,7 +86,17 @@ public record WebsiteScanDto(
 public record ScanConfigurationDto(
     IReadOnlyList<string> Checks,
     IReadOnlyList<string> Tools,
-    string ReportType);
+    string ReportType,
+    ScanAuthDto? Auth = null);
+
+/// <summary>Auth metadata returned to clients — never includes password.</summary>
+public record ScanAuthDto(
+    string Type,
+    bool Enabled,
+    string? LoginUrl,
+    string? UsernameMasked,
+    string? SuccessUrlContains,
+    string? ClinicIdMasked = null);
 
 public static class WebsiteScanMappings
 {
@@ -107,8 +128,42 @@ public static class WebsiteScanMappings
             scan.HasHttps,
             scan.ServerHeader,
             scan.ReportType,
-            new ScanConfigurationDto(config.Checks, config.Tools, config.ReportType),
+            new ScanConfigurationDto(
+                config.Checks,
+                config.Tools,
+                config.ReportType,
+                ToAuthDto(config.Auth)),
             report);
+    }
+
+    public static ScanAuthDto? ToAuthDto(ScanAuthConfiguration? auth)
+    {
+        if (auth is null || !auth.IsEnabled)
+            return auth is null ? null : new ScanAuthDto(ScanAuthConfiguration.TypeNone, false, null, null, null, null);
+
+        return new ScanAuthDto(
+            auth.Type,
+            true,
+            auth.LoginUrl,
+            MaskUsername(auth.Username),
+            auth.SuccessUrlContains,
+            MaskUsername(auth.ClinicId));
+    }
+
+    public static string? MaskUsername(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return null;
+        var value = username.Trim();
+        if (value.Length <= 2) return new string('*', value.Length);
+        if (value.Contains('@', StringComparison.Ordinal))
+        {
+            var parts = value.Split('@', 2);
+            var local = parts[0];
+            var maskedLocal = local.Length <= 1 ? "*" : local[0] + new string('*', Math.Min(local.Length - 1, 4));
+            return $"{maskedLocal}@{parts[1]}";
+        }
+
+        return value[0] + new string('*', Math.Min(value.Length - 1, 6));
     }
 
     public static ScanCatalogDto ToCatalogDto(string? lang = null) => ScanI18n.LocalizeCatalog(lang);

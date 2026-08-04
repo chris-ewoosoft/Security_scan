@@ -13,14 +13,23 @@ namespace SecurityPortal.API.Services;
 
 public sealed class WebsiteScanProcessor(
     IServiceScopeFactory scopeFactory,
-    IHttpClientFactory httpClientFactory,
     ScanCancellationRegistry cancelRegistry,
+    IScanSecretProtector secretProtector,
     ILogger<WebsiteScanProcessor> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    private static readonly ScanCheckDefinition AuthCheckDef = new(
+        "authenticated-scan",
+        "Authenticated Scan",
+        "Login then scan post-auth areas.",
+        ["http-probe"],
+        false,
+        "owasp",
+        4);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -49,8 +58,6 @@ public sealed class WebsiteScanProcessor(
         var queued = await scans.GetQueuedAsync(5, stoppingToken);
         if (queued.Count == 0) return;
 
-        var client = httpClientFactory.CreateClient("WebsiteScanner");
-
         foreach (var scan in queued)
         {
             if (await IsCancelledAsync(scan.Id, stoppingToken))
@@ -69,6 +76,8 @@ public sealed class WebsiteScanProcessor(
             try
             {
                 var config = scan.GetConfiguration();
+                using var handler = CreateScanHandler();
+                using var client = CreateScanClient(handler);
                 var result = await AnalyzeAsync(client, scan.Id, scan.TargetUrl, config, scanToken);
 
                 // Drop tracked entity so we cannot overwrite a concurrent Cancelled row.
@@ -131,11 +140,25 @@ public sealed class WebsiteScanProcessor(
         return current?.Status == ScanStatus.Cancelled;
     }
 
-    private async Task EnsureNotCancelledAsync(Guid scanId, CancellationToken cancellationToken)
+    private static HttpClientHandler CreateScanHandler() => new()
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (await IsCancelledAsync(scanId, cancellationToken))
-            throw new OperationCanceledException("Scan cancelled by user.");
+        AllowAutoRedirect = true,
+        MaxAutomaticRedirections = 12,
+        UseCookies = true,
+        CookieContainer = new System.Net.CookieContainer(),
+        AutomaticDecompression = System.Net.DecompressionMethods.All,
+        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+    };
+
+    private static HttpClient CreateScanClient(HttpClientHandler handler)
+    {
+        var client = new HttpClient(handler, disposeHandler: false)
+        {
+            Timeout = TimeSpan.FromSeconds(20)
+        };
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "SecurityPortal-Scanner/1.0");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        return client;
     }
 
     private async Task<AnalysisResult> AnalyzeAsync(
@@ -145,11 +168,30 @@ public sealed class WebsiteScanProcessor(
         ScanConfiguration config,
         CancellationToken cancellationToken)
     {
+        var authFindings = new List<ScanFindingDto>();
+        var authenticated = false;
+        string? authNote = null;
+
+        if (config.Auth?.IsEnabled == true)
+        {
+            await EnsureNotCancelledAsync(scanId, cancellationToken);
+            var login = await TryAuthenticateAsync(client, targetUrl, config.Auth, cancellationToken);
+            authenticated = login.Success;
+            authNote = login.Message;
+            authFindings.Add(login.Success
+                ? Finding(AuthCheckDef, AuthCheckDef.Tools, "Info", "auth.ok",
+                    P(("observed", login.Message), ("authType", config.Auth.Type), ("loginUrl", login.LoginUrl)),
+                    $"authType={config.Auth.Type}; loginUrl={login.LoginUrl}")
+                : Finding(AuthCheckDef, AuthCheckDef.Tools, "High", "auth.failed",
+                    P(("observed", RedactSecrets(login.Message, config.Auth)),
+                        ("impact", "Post-login checks may be incomplete or skipped."),
+                        ("loginUrl", login.LoginUrl),
+                        ("authType", config.Auth.Type)),
+                    $"authType={config.Auth.Type}; loginUrl={login.LoginUrl}"));
+        }
+
         var sw = Stopwatch.StartNew();
         using var request = new HttpRequestMessage(HttpMethod.Get, targetUrl);
-        request.Headers.TryAddWithoutValidation("User-Agent", "SecurityPortal-Scanner/1.0");
-        request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
@@ -165,15 +207,29 @@ public sealed class WebsiteScanProcessor(
 
         var selectedChecks = config.Checks
             .Select(id => ScanCatalog.Checks.First(c => c.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
+            .Where(c => !c.Id.Equals("authenticated-scan", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
+        // Prefer authenticated session for deep probes when login succeeded.
+        var deepClient = client;
+
         var findings = new List<ScanFindingDto>();
+        findings.AddRange(authFindings);
+
         foreach (var check in selectedChecks)
         {
             await EnsureNotCancelledAsync(scanId, cancellationToken);
 
             var tools = check.Tools.Where(t => config.Tools.Contains(t, StringComparer.OrdinalIgnoreCase)).ToList();
             if (tools.Count == 0) tools = check.Tools.ToList();
+
+            var needsAuthSession = check.Id is "directory-discovery" or "sensitive-file-scan" or "cookie-security";
+            if (needsAuthSession && config.Auth?.IsEnabled == true && !authenticated)
+            {
+                // Skip deep auth-dependent probes when login failed (except we still evaluate public cookie header above).
+                if (check.Id is "directory-discovery" or "sensitive-file-scan")
+                    continue;
+            }
 
             IEnumerable<ScanFindingDto> batch = check.Id switch
             {
@@ -185,8 +241,8 @@ public sealed class WebsiteScanProcessor(
                 "cors-policy" => EvaluateCors(check, tools, targetUrl, corsOrigin),
                 "information-disclosure" => EvaluateDisclosure(check, tools, targetUrl, headers, server, poweredBy),
                 "port-scan" => await EvaluatePortScanAsync(check, tools, targetUrl, cancellationToken),
-                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(client, check, tools, targetUrl, cancellationToken),
-                "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(client, check, tools, targetUrl, cancellationToken),
+                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, cancellationToken),
+                "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, cancellationToken),
                 "vulnerability-scan" => EvaluateVulnerabilityPlaceholder(check, tools, targetUrl),
                 "technology-detection" => EvaluateTechnology(check, tools, headers, server, poweredBy),
                 "screenshot" => EvaluateScreenshotPlaceholder(check, tools, targetUrl),
@@ -206,6 +262,13 @@ public sealed class WebsiteScanProcessor(
         var executive = ScanI18n.BuildExecutiveSummary(
             targetUrl, riskLevel, findings.Count(f => f.Severity == "High"),
             findings.Count(f => f.Severity == "Medium"), config.ReportType, "en");
+        if (config.Auth?.IsEnabled == true)
+        {
+            executive += authenticated
+                ? " Authenticated session established."
+                : " Authentication failed; post-login coverage limited.";
+        }
+
         var report = new ScanReportPayloadDto(
             config.ReportType,
             reportDef.Name,
@@ -216,9 +279,11 @@ public sealed class WebsiteScanProcessor(
             findings,
             executive);
 
-        var summary =
-            $"{findings.Count} finding(s). Risk: {riskLevel} ({riskScore}/100). " +
-            $"HTTP {(int)response.StatusCode} in {sw.ElapsedMilliseconds} ms.";
+        var summary = authenticated
+            ? $"Authenticated scan completed ({authNote})."
+            : config.Auth?.IsEnabled == true
+                ? $"Scan completed with auth failure ({authNote})."
+                : $"Scan completed with {findings.Count} findings.";
 
         return new AnalysisResult(
             summary,
@@ -227,6 +292,494 @@ public sealed class WebsiteScanProcessor(
             hasHttps,
             server,
             report);
+    }
+
+    private async Task<AuthAttemptResult> TryAuthenticateAsync(
+        HttpClient client,
+        string targetUrl,
+        ScanAuthConfiguration auth,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var password = secretProtector.Unprotect(auth.PasswordCipher!);
+            var loginUrl = ResolveLoginUrl(targetUrl, auth.LoginUrl);
+
+            if (auth.Type.Equals(ScanAuthConfiguration.TypeBasic, StringComparison.OrdinalIgnoreCase))
+            {
+                // Probe without credentials first to see if Basic is actually required.
+                using var unauthProbe = new HttpRequestMessage(HttpMethod.Get, targetUrl);
+                using var unauthResponse = await client.SendAsync(
+                    unauthProbe, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                var unauthCode = (int)unauthResponse.StatusCode;
+                var challengesBasic = unauthResponse.Headers.WwwAuthenticate
+                    .Any(h => h.Scheme.Equals("Basic", StringComparison.OrdinalIgnoreCase));
+
+                if (unauthCode is >= 200 and < 400 && !challengesBasic)
+                {
+                    return new AuthAttemptResult(
+                        false,
+                        loginUrl,
+                        $"Target did not challenge for HTTP Basic (HTTP {unauthCode}); credentials were not validated.");
+                }
+
+                var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{auth.Username}:{password}"));
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
+                using var probe = new HttpRequestMessage(HttpMethod.Get, targetUrl);
+                using var response = await client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                var code = (int)response.StatusCode;
+                if (code is 401 or 403)
+                    return new AuthAttemptResult(false, loginUrl, $"Basic auth rejected with HTTP {code}.");
+                if (code is >= 200 and < 400)
+                    return new AuthAttemptResult(true, loginUrl, $"Basic auth accepted (HTTP {code}).");
+                return new AuthAttemptResult(false, loginUrl, $"Basic auth probe failed with HTTP {code}.");
+            }
+
+            if (auth.Type.Equals(ScanAuthConfiguration.TypeGraphql, StringComparison.OrdinalIgnoreCase))
+                return await TryGraphqlAuthenticateAsync(client, auth, password, loginUrl, cancellationToken);
+
+            // Form login
+            using var getLogin = new HttpRequestMessage(HttpMethod.Get, loginUrl);
+            using var loginPage = await client.SendAsync(getLogin, cancellationToken);
+            var html = await loginPage.Content.ReadAsStringAsync(cancellationToken);
+
+            // SPA / Next.js pages often have no HTML form — try OIDC /auth/login then GraphQL.
+            if (!Regex.IsMatch(html, "<form\\b", RegexOptions.IgnoreCase)
+                && (html.Contains("__NEXT_DATA__", StringComparison.Ordinal)
+                    || html.Contains("/_next/", StringComparison.OrdinalIgnoreCase)))
+            {
+                AuthAttemptResult? oidcFailure = null;
+                foreach (var oidcLogin in DiscoverOidcLoginUrls(targetUrl, html))
+                {
+                    var oidc = await TryFormLoginAtAsync(client, auth, password, oidcLogin, cancellationToken);
+                    if (oidc.Success)
+                        return oidc;
+                    oidcFailure = oidc;
+                }
+
+                if (oidcFailure is not null
+                    && oidcFailure.Message.Contains("flash=", StringComparison.OrdinalIgnoreCase))
+                {
+                    return oidcFailure;
+                }
+
+                var discovered = await DiscoverGraphqlEndpointsAsync(client, loginUrl, html, cancellationToken);
+                foreach (var endpoint in discovered)
+                {
+                    var gql = await TryGraphqlAuthenticateAsync(client, auth, password, endpoint, cancellationToken);
+                    if (gql.Success)
+                    {
+                        return new AuthAttemptResult(
+                            true,
+                            endpoint,
+                            $"SPA had no HTML form; GraphQL login succeeded via discovered endpoint ({endpoint}).");
+                    }
+                }
+
+                if (oidcFailure is not null)
+                    return oidcFailure;
+
+                var hint = discovered.Count > 0
+                    ? $"Tried GraphQL: {string.Join(", ", discovered)}."
+                    : "No GraphQL URL found in page assets.";
+                return new AuthAttemptResult(
+                    false,
+                    loginUrl,
+                    $"Login page is a JavaScript SPA (no HTML form). {hint} For Clever Dent, use Form login with Clinic ID + User ID.");
+            }
+
+            return await TryFormLoginAtAsync(client, auth, password, loginUrl, cancellationToken, html);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Authentication attempt failed");
+            return new AuthAttemptResult(false, auth.LoginUrl ?? targetUrl, "Authentication attempt error (details redacted).");
+        }
+    }
+
+    private async Task<AuthAttemptResult> TryFormLoginAtAsync(
+        HttpClient client,
+        ScanAuthConfiguration auth,
+        string password,
+        string loginUrl,
+        CancellationToken cancellationToken,
+        string? prefetchedHtml = null)
+    {
+        string html;
+        string pageUrl = loginUrl;
+        if (prefetchedHtml is null)
+        {
+            using var getLogin = new HttpRequestMessage(HttpMethod.Get, loginUrl);
+            using var loginPage = await client.SendAsync(getLogin, cancellationToken);
+            html = await loginPage.Content.ReadAsStringAsync(cancellationToken);
+            pageUrl = loginPage.RequestMessage?.RequestUri?.AbsoluteUri ?? loginUrl;
+        }
+        else
+        {
+            html = prefetchedHtml;
+            pageUrl = loginUrl;
+        }
+
+        // If still no form (e.g. OIDC bounced to session-error), fail clearly.
+        if (!Regex.IsMatch(html, "<form\\b", RegexOptions.IgnoreCase))
+        {
+            return new AuthAttemptResult(
+                false,
+                pageUrl,
+                $"No HTML login form at {pageUrl}.");
+        }
+
+        // Re-fetch using the response URI if the first GET was a redirect chain landing page.
+        // HttpClient follows redirects; parse action relative to loginUrl host carefully.
+        var form = ExtractLoginForm(html, pageUrl, auth);
+        form.Fields[form.PasswordField] = password;
+        form.Fields[form.UsernameField] = auth.Username ?? "";
+
+        if (!string.IsNullOrWhiteSpace(auth.ClinicId))
+        {
+            var clinicField = form.Fields.Keys.FirstOrDefault(k =>
+                                  k.Contains("hospital", StringComparison.OrdinalIgnoreCase)
+                                  || k.Contains("clinic", StringComparison.OrdinalIgnoreCase)
+                                  || k.Equals("org", StringComparison.OrdinalIgnoreCase)
+                                  || k.Equals("tenant", StringComparison.OrdinalIgnoreCase))
+                              ?? "hospital";
+            form.Fields[clinicField] = auth.ClinicId;
+        }
+
+        using var post = new HttpRequestMessage(HttpMethod.Post, form.ActionUrl);
+        post.Content = new FormUrlEncodedContent(form.Fields);
+        post.Headers.TryAddWithoutValidation("Referer", pageUrl);
+        using var posted = await client.SendAsync(post, cancellationToken);
+        var finalUrl = posted.RequestMessage?.RequestUri?.ToString() ?? form.ActionUrl;
+        // After redirects, HttpClient leaves RequestMessage as original POST URL; check content for success markers.
+        var body = await posted.Content.ReadAsStringAsync(cancellationToken);
+        var codePost = (int)posted.StatusCode;
+
+        var flash = Regex.Match(body, "flashLocale\\s*=\\s*\"([^\"]*)\"", RegexOptions.IgnoreCase);
+        if (flash.Success && !string.IsNullOrWhiteSpace(flash.Groups[1].Value))
+        {
+            var code = flash.Groups[1].Value;
+            var hint = code switch
+            {
+                "wrongPassMsg" => "Wrong password (clinic/user recognized).",
+                "employeeFoundErrMsg" => "User ID not found.",
+                "invalidClinicMsg" or "clinicErrMsg" => "Clinic ID invalid.",
+                "invalidHospitalMsg" => "Hospital/clinic unavailable.",
+                "fiveTimeFailErrMsg" or "fiveTimeFailErrMsgAdmin" => "Account locked after failed attempts.",
+                _ => $"Login rejected (flash={code})."
+            };
+            return new AuthAttemptResult(false, pageUrl, $"Form login failed: {hint} flash={code}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(auth.SuccessUrlContains)
+            && (finalUrl.Contains(auth.SuccessUrlContains, StringComparison.OrdinalIgnoreCase)
+                || body.Contains(auth.SuccessUrlContains, StringComparison.OrdinalIgnoreCase)))
+        {
+            return new AuthAttemptResult(true, pageUrl, $"Form login success marker matched ({auth.SuccessUrlContains}).");
+        }
+
+        var stillOnLogin = finalUrl.Contains("/interaction/", StringComparison.OrdinalIgnoreCase)
+                           || finalUrl.Contains("login", StringComparison.OrdinalIgnoreCase)
+                           || LooksLikeLoginPage(body)
+                           || body.Contains("wrongPassMsg", StringComparison.OrdinalIgnoreCase)
+                           || body.Contains("Incorrect information", StringComparison.OrdinalIgnoreCase);
+
+        // OIDC success usually leaves interaction and lands on callback / app with 2xx.
+        if (codePost is >= 200 and < 400 && !stillOnLogin)
+            return new AuthAttemptResult(true, pageUrl, $"Form login appears successful (HTTP {codePost}, url={finalUrl}).");
+
+        if (codePost is >= 200 and < 400
+            && (finalUrl.Contains("/auth/callback", StringComparison.OrdinalIgnoreCase)
+                || finalUrl.Contains("intro.", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("access_token", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new AuthAttemptResult(true, pageUrl, $"Form/OIDC login completed (HTTP {codePost}, url={finalUrl}).");
+        }
+
+        if (stillOnLogin || codePost is 401 or 403)
+            return new AuthAttemptResult(false, pageUrl, $"Form login failed (HTTP {codePost}, url={finalUrl}).");
+
+        if (posted.Headers.TryGetValues("Set-Cookie", out _) || client.DefaultRequestHeaders.Authorization is not null)
+            return new AuthAttemptResult(true, pageUrl, $"Form login returned session artifacts (HTTP {codePost}).");
+
+        return new AuthAttemptResult(false, pageUrl, $"Form login inconclusive (HTTP {codePost}, url={finalUrl}).");
+    }
+
+    private static IReadOnlyList<string> DiscoverOidcLoginUrls(string targetUrl, string html)
+    {
+        var urls = new List<string>();
+        foreach (Match m in Regex.Matches(
+                     html,
+                     "https?://[a-zA-Z0-9._\\-:]+",
+                     RegexOptions.IgnoreCase))
+        {
+            // filled from scripts via CollectGraphql later; keep empty here
+        }
+
+        // Clever Dent pattern: graphql host without /graphql + /auth/login?returnTo=
+        var gqlHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectGraphqlUrls(html, gqlHosts);
+        foreach (var gql in gqlHosts)
+        {
+            if (!Uri.TryCreate(gql, UriKind.Absolute, out var uri)) continue;
+            var root = $"{uri.Scheme}://{uri.Authority}";
+            urls.Add($"{root}/auth/login?returnTo={Uri.EscapeDataString(targetUrl)}");
+        }
+
+        // Also try sibling host cvgraph2 if target is intro.*
+        if (Uri.TryCreate(targetUrl, UriKind.Absolute, out var target)
+            && target.Host.Contains("intro.", StringComparison.OrdinalIgnoreCase))
+        {
+            var authHost = target.Host.Replace("intro.", "cvgraph2.", StringComparison.OrdinalIgnoreCase);
+            urls.Add($"{target.Scheme}://{authHost}/auth/login?returnTo={Uri.EscapeDataString(targetUrl)}");
+        }
+
+        return urls.Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList();
+    }
+
+    private async Task<AuthAttemptResult> TryGraphqlAuthenticateAsync(
+        HttpClient client,
+        ScanAuthConfiguration auth,
+        string password,
+        string loginUrl,
+        CancellationToken cancellationToken)
+    {
+        var userField = string.IsNullOrWhiteSpace(auth.UsernameField) ? "loginId" : auth.UsernameField.Trim();
+        var passField = string.IsNullOrWhiteSpace(auth.PasswordField) ? "password" : auth.PasswordField.Trim();
+
+        // Default mutation used by many Clever/manager GraphQL portals; override via UsernameField/PasswordField names.
+        const string query = """
+            mutation LoginManager($loginManagerDto: LoginManagerInput!) {
+              loginManager(loginManagerDto: $loginManagerDto) {
+                token
+              }
+            }
+            """;
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["query"] = query,
+            ["variables"] = new Dictionary<string, object?>
+            {
+                ["loginManagerDto"] = new Dictionary<string, object?>
+                {
+                    [userField] = auth.Username,
+                    [passField] = password
+                }
+            }
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, loginUrl)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+        };
+        using var response = await client.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        var code = (int)response.StatusCode;
+
+        if (code is < 200 or >= 300)
+            return new AuthAttemptResult(false, loginUrl, $"GraphQL login HTTP {code}.");
+
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        if (doc.RootElement.TryGetProperty("errors", out var errors)
+            && errors.ValueKind == JsonValueKind.Array
+            && errors.GetArrayLength() > 0)
+        {
+            return new AuthAttemptResult(false, loginUrl, "GraphQL login returned errors (credentials or schema rejected).");
+        }
+
+        var token = FindJsonStringProperty(doc.RootElement, "token");
+        if (string.IsNullOrWhiteSpace(token))
+            return new AuthAttemptResult(false, loginUrl, "GraphQL login succeeded HTTP-wise but no token was returned.");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return new AuthAttemptResult(true, loginUrl, "GraphQL login succeeded; Bearer token attached for subsequent probes.");
+    }
+
+    private static string? FindJsonStringProperty(JsonElement element, string name)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (prop.NameEquals(name) && prop.Value.ValueKind == JsonValueKind.String)
+                    return prop.Value.GetString();
+                var nested = FindJsonStringProperty(prop.Value, name);
+                if (!string.IsNullOrWhiteSpace(nested))
+                    return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = FindJsonStringProperty(item, name);
+                if (!string.IsNullOrWhiteSpace(nested))
+                    return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<IReadOnlyList<string>> DiscoverGraphqlEndpointsAsync(
+        HttpClient client,
+        string pageUrl,
+        string html,
+        CancellationToken cancellationToken)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectGraphqlUrls(html, found);
+
+        var scriptSrcs = Regex.Matches(html, "src=[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase)
+            .Select(m => m.Groups[1].Value)
+            .Where(src => src.Contains("/_next/", StringComparison.OrdinalIgnoreCase)
+                          || src.Contains("app", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        foreach (var src in scriptSrcs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var abs = Uri.TryCreate(new Uri(pageUrl), src, out var uri) ? uri.ToString() : null;
+                if (abs is null) continue;
+                using var req = new HttpRequestMessage(HttpMethod.Get, abs);
+                using var res = await client.SendAsync(req, cancellationToken);
+                if (!res.IsSuccessStatusCode) continue;
+                var js = await res.Content.ReadAsStringAsync(cancellationToken);
+                CollectGraphqlUrls(js, found);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort discovery only.
+            }
+        }
+
+        // Prefer backend/manager graphql hosts over chrome/apollo docs false positives.
+        return found
+            .Where(u => u.Contains("/graphql", StringComparison.OrdinalIgnoreCase))
+            .Where(u => !u.Contains("chrome.google.com", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("github.com", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(u => u.Contains("manager", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(u => u.Length)
+            .Take(5)
+            .ToList();
+    }
+
+    private static void CollectGraphqlUrls(string text, HashSet<string> sink)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        foreach (Match m in Regex.Matches(
+                     text,
+                     "https?://[a-zA-Z0-9._\\-:]+/[^\\s\"'<>]*graphql[^\\s\"'<>]*",
+                     RegexOptions.IgnoreCase))
+        {
+            var url = m.Value.TrimEnd('.', ',', ';', ')', ']');
+            if (Uri.TryCreate(url, UriKind.Absolute, out _))
+                sink.Add(url);
+        }
+    }
+
+    private static string ResolveLoginUrl(string targetUrl, string? loginUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(loginUrl))
+            return loginUrl.Trim();
+
+        // Prefer the target itself; many SPAs host login entry on `/` and redirect out-of-band.
+        return targetUrl.Trim();
+    }
+
+    private static LoginFormExtract ExtractLoginForm(
+        string html,
+        string loginUrl,
+        ScanAuthConfiguration auth)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var actionUrl = loginUrl;
+
+        var formMatch = Regex.Match(
+            html,
+            "<form\\b[^>]*>.*?</form>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var formHtml = formMatch.Success ? formMatch.Value : html;
+
+        var actionMatch = Regex.Match(formHtml, "action\\s*=\\s*[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase);
+        if (actionMatch.Success)
+        {
+            var action = System.Net.WebUtility.HtmlDecode(actionMatch.Groups[1].Value.Trim());
+            if (!string.IsNullOrWhiteSpace(action) && !action.StartsWith('#'))
+                actionUrl = Uri.TryCreate(new Uri(loginUrl), action, out var abs) ? abs.ToString() : loginUrl;
+        }
+
+        foreach (Match input in Regex.Matches(formHtml, "<input\\b[^>]*>", RegexOptions.IgnoreCase))
+        {
+            var tag = input.Value;
+            var name = Attr(tag, "name");
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            var type = (Attr(tag, "type") ?? "text").ToLowerInvariant();
+            var value = Attr(tag, "value") ?? "";
+            if (type is "submit" or "button" or "image") continue;
+            fields[name] = System.Net.WebUtility.HtmlDecode(value);
+        }
+
+        var userField = auth.UsernameField;
+        if (string.IsNullOrWhiteSpace(userField))
+        {
+            userField = fields.Keys.FirstOrDefault(k =>
+                k.Contains("user", StringComparison.OrdinalIgnoreCase)
+                || k.Contains("email", StringComparison.OrdinalIgnoreCase)
+                || k.Contains("employee", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("login", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("loginid", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("account", StringComparison.OrdinalIgnoreCase)) ?? "username";
+        }
+
+        var passField = auth.PasswordField;
+        if (string.IsNullOrWhiteSpace(passField))
+        {
+            passField = fields.Keys.FirstOrDefault(k =>
+                k.Contains("pass", StringComparison.OrdinalIgnoreCase)
+                || k.Equals("pwd", StringComparison.OrdinalIgnoreCase)) ?? "password";
+        }
+
+        return new LoginFormExtract(actionUrl, fields, userField, passField);
+    }
+
+    private static string? Attr(string tag, string name)
+    {
+        var match = Regex.Match(tag, name + "\\s*=\\s*[\"']([^\"']*)[\"']", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static bool LooksLikeLoginPage(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return false;
+        var lower = html.ToLowerInvariant();
+        return lower.Contains("type=\"password\"")
+               || lower.Contains("type='password'")
+               || (lower.Contains("login") && lower.Contains("password"));
+    }
+
+    private static string RedactSecrets(string message, ScanAuthConfiguration auth)
+    {
+        var text = message;
+        if (!string.IsNullOrWhiteSpace(auth.Username))
+            text = text.Replace(auth.Username, MaskUsername(auth.Username), StringComparison.Ordinal);
+        return text;
+    }
+
+    private static string MaskUsername(string username) =>
+        WebsiteScanMappings.MaskUsername(username) ?? "***";
+
+    private async Task EnsureNotCancelledAsync(Guid scanId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (await IsCancelledAsync(scanId, cancellationToken))
+            throw new OperationCanceledException("Scan cancelled by user.");
     }
 
     private static IEnumerable<ScanFindingDto> EvaluateReachability(
@@ -879,6 +1432,13 @@ public sealed class WebsiteScanProcessor(
 
     private static string Truncate(string value) =>
         value.Length <= 240 ? value : value[..240] + "…";
+
+    private sealed record AuthAttemptResult(bool Success, string LoginUrl, string Message);
+    private sealed record LoginFormExtract(
+        string ActionUrl,
+        Dictionary<string, string> Fields,
+        string UsernameField,
+        string PasswordField);
 
     private sealed record AnalysisResult(
         string Summary,

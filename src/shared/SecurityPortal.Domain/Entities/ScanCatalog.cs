@@ -16,6 +16,8 @@ public static class ScanCatalog
             ["fingerprint"], true, "recon", 3),
         new("cookie-security", "Cookie Security", "Kiểm tra cờ Secure, HttpOnly, SameSite trên Set-Cookie.",
             ["cookie-inspector"], false, "owasp", 3),
+        new("authenticated-scan", "Authenticated Scan", "Đăng nhập form/basic rồi quét khu vực sau login.",
+            ["http-probe"], false, "owasp", 4),
         new("cors-policy", "CORS Policy", "Đánh giá Access-Control-Allow-Origin và cấu hình CORS lộ ra.",
             ["cors-checker"], false, "owasp", 3),
         new("information-disclosure", "Information Disclosure", "Phát hiện header nhạy cảm và dấu hiệu lộ thông tin.",

@@ -193,6 +193,86 @@ body.page-config .atmosphere {
   flex-direction: column;
 }
 
+.home-left .auth-scan-box {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.home-left .auth-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.92rem;
+  color: #e2e8f0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.home-left .auth-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #38bdf8;
+}
+
+.home-left .auth-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.home-left .auth-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.home-left .auth-row label {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.home-left .auth-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #7dd3fc;
+  line-height: 1.35;
+}
+
+.home-left .auth-row input,
+.home-left .auth-row select {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(2, 6, 23, 0.55);
+  color: #f1f5f9;
+  font: inherit;
+}
+
+.home-left .auth-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+.home-left .auth-row-2 > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+@media (max-width: 640px) {
+  .home-left .auth-row-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
 .home-left .scan-actions {
   display: flex;
   gap: 0.55rem;

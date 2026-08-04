@@ -10,7 +10,8 @@ namespace SecurityPortal.Application.Features.Scans.Handlers;
 
 public class StartWebsiteScanCommandHandler(
     IWebsiteScanRepository scanRepository,
-    IUnitOfWork unitOfWork)
+    IUnitOfWork unitOfWork,
+    IScanSecretProtector secretProtector)
     : IRequestHandler<StartWebsiteScanCommand, WebsiteScanDto>
 {
     public async Task<WebsiteScanDto> Handle(StartWebsiteScanCommand request, CancellationToken cancellationToken)
@@ -23,10 +24,35 @@ public class StartWebsiteScanCommandHandler(
         if (!string.IsNullOrWhiteSpace(request.ReportType))
             config.ReportType = request.ReportType;
 
+        config.Auth = BuildAuth(request.Auth);
+
         var scan = WebsiteScan.Create(request.TargetUrl, config, request.UserId, request.OrganizationId);
         await scanRepository.AddAsync(scan, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return WebsiteScanMappings.ToDto(scan);
+    }
+
+    private ScanAuthConfiguration? BuildAuth(StartScanAuthRequest? auth)
+    {
+        if (auth is null) return null;
+        var type = (auth.Type ?? ScanAuthConfiguration.TypeNone).Trim().ToLowerInvariant();
+        if (type is "" or ScanAuthConfiguration.TypeNone)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(auth.Password))
+            throw new DomainException("Password is required for authenticated scans.");
+
+        return new ScanAuthConfiguration
+        {
+            Type = type,
+            LoginUrl = string.IsNullOrWhiteSpace(auth.LoginUrl) ? null : auth.LoginUrl.Trim(),
+            Username = auth.Username?.Trim(),
+            PasswordCipher = secretProtector.Protect(auth.Password),
+            SuccessUrlContains = string.IsNullOrWhiteSpace(auth.SuccessUrlContains) ? null : auth.SuccessUrlContains.Trim(),
+            UsernameField = string.IsNullOrWhiteSpace(auth.UsernameField) ? null : auth.UsernameField.Trim(),
+            PasswordField = string.IsNullOrWhiteSpace(auth.PasswordField) ? null : auth.PasswordField.Trim(),
+            ClinicId = string.IsNullOrWhiteSpace(auth.ClinicId) ? null : auth.ClinicId.Trim(),
+        };
     }
 }
 

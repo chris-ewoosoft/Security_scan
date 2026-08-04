@@ -9,7 +9,8 @@ public record StartWebsiteScanCommand(
     IReadOnlyList<string>? Tools = null,
     string? ReportType = null,
     Guid? UserId = null,
-    Guid? OrganizationId = null) : IRequest<WebsiteScanDto>;
+    Guid? OrganizationId = null,
+    StartScanAuthRequest? Auth = null) : IRequest<WebsiteScanDto>;
 
 public record DeleteWebsiteScansCommand(IReadOnlyList<Guid> Ids) : IRequest<DeleteWebsiteScansResultDto>;
 

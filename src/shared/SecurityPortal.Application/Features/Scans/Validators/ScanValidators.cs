@@ -27,6 +27,36 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
             .Must(id => ScanCatalog.ValidReportIds.Contains(id))
             .When(x => !string.IsNullOrWhiteSpace(x.ReportType))
             .WithMessage("Unknown report type selected.");
+
+        When(x => x.Auth is not null && !string.IsNullOrWhiteSpace(x.Auth.Type)
+                  && !x.Auth.Type.Equals("none", StringComparison.OrdinalIgnoreCase), () =>
+        {
+            RuleFor(x => x.Auth!.Type!)
+                .Must(t => t.Equals("form", StringComparison.OrdinalIgnoreCase)
+                           || t.Equals("basic", StringComparison.OrdinalIgnoreCase)
+                           || t.Equals("graphql", StringComparison.OrdinalIgnoreCase))
+                .WithMessage("Auth type must be form, basic, or graphql.");
+
+            RuleFor(x => x.Auth!.Username)
+                .NotEmpty().WithMessage("Username is required for authenticated scans.")
+                .MaximumLength(256);
+
+            RuleFor(x => x.Auth!.Password)
+                .NotEmpty().WithMessage("Password is required for authenticated scans.")
+                .MaximumLength(512);
+
+            RuleFor(x => x.Auth!.LoginUrl!)
+                .MaximumLength(2048)
+                .Must(BeValidWebsiteUrl)
+                .When(x => !string.IsNullOrWhiteSpace(x.Auth!.LoginUrl)
+                           || x.Auth!.Type!.Equals("graphql", StringComparison.OrdinalIgnoreCase))
+                .WithMessage("Enter a valid login / GraphQL URL.");
+
+            RuleFor(x => x.Auth!.LoginUrl)
+                .NotEmpty()
+                .When(x => x.Auth!.Type!.Equals("graphql", StringComparison.OrdinalIgnoreCase))
+                .WithMessage("GraphQL endpoint URL is required.");
+        });
     }
 
     private static bool BeValidWebsiteUrl(string? value)
