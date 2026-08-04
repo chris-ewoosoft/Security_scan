@@ -19,9 +19,10 @@ public record ScanCheckDto(
     string Description,
     IReadOnlyList<string> Tools,
     bool EnabledByDefault,
-    string Category);
+    string Category,
+    int Priority);
 
-public record ScanToolDto(string Id, string Name, string Description);
+public record ScanToolDto(string Id, string Name, string Kind, string Description);
 
 public record ScanReportDto(string Id, string Name, string Description);
 
@@ -33,7 +34,8 @@ public record ScanFindingDto(
     string Detail,
     string? Evidence,
     string? Recommendation,
-    IReadOnlyList<string> Tools);
+    IReadOnlyList<string> Tools,
+    IReadOnlyList<string>? ReproductionSteps = null);
 
 public record ScanReportPayloadDto(
     string ReportType,
@@ -101,7 +103,8 @@ public static class WebsiteScanMappings
     }
 
     public static ScanCatalogDto ToCatalogDto() => new(
-        ScanCatalog.Checks.Select(c => new ScanCheckDto(c.Id, c.Name, c.Description, c.Tools, c.EnabledByDefault, c.Category)).ToList(),
-        ScanCatalog.Tools.Select(t => new ScanToolDto(t.Id, t.Name, t.Description)).ToList(),
+        ScanCatalog.Checks.Select(c => new ScanCheckDto(
+            c.Id, c.Name, c.Description, c.Tools, c.EnabledByDefault, c.Category, c.Priority)).ToList(),
+        ScanCatalog.Tools.Select(t => new ScanToolDto(t.Id, t.Name, t.Kind, t.Description)).ToList(),
         ScanCatalog.Reports.Select(r => new ScanReportDto(r.Id, r.Name, r.Description)).ToList());
 }

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=6" />
+  <link rel="stylesheet" href="/styles.css?v=17" />
 </head>
 <body class="page-home">
   <div class="atmosphere" aria-hidden="true"></div>
@@ -16,9 +16,9 @@
   <header class="topbar">
     <a class="brand" href="/">Security Portal</a>
     <nav class="main-nav">
-      <a class="nav-item is-active" href="/">Trang chủ</a>
-      <a class="nav-item" href="/configure.html">Cấu hình</a>
-      <a class="nav-item" href="/history.html">Lịch sử</a>
+      <a class="nav-item is-active" href="/" data-nav="home">Trang chủ</a>
+      <a class="nav-item" href="/?view=config" data-nav="config">Cấu hình</a>
+      <a class="nav-item" href="/?view=history" data-nav="history">Lịch sử</a>
     </nav>
   </header>
 
@@ -26,7 +26,7 @@
     <section class="home-left" aria-label="Security Portal">
       <p class="brand-mark">Security Portal</p>
       <h1>Quét bảo mật website</h1>
-      <p class="lede">Nhập URL và chạy scan theo cấu hình đã lưu. Technical Report hiện bên phải sau khi scan.</p>
+      <p class="lede">Cột trái: scan. Cột phải: Cấu hình, Lịch sử hoặc Technical Report.</p>
 
       <form id="scan-form" class="scan-form" autocomplete="off">
         <label class="sr-only" for="target-url">Địa chỉ website cần scan</label>
@@ -52,17 +52,21 @@
           <p id="config-summary" class="snapshot-text">Đang tải…</p>
         </div>
         <div class="snapshot-actions">
-          <a class="ghost-btn" href="/configure.html">Chỉnh cấu hình</a>
-          <a class="ghost-btn" href="/history.html">Lịch sử</a>
+          <button type="button" class="ghost-btn" id="open-config-btn">Chỉnh cấu hình</button>
+          <button type="button" class="ghost-btn" id="open-history-btn">Lịch sử</button>
         </div>
       </aside>
     </section>
 
-    <section class="home-right" aria-label="Technical Report">
+    <section class="home-right" aria-label="Right panel">
       <div id="report-placeholder" class="report-placeholder">
-        <p class="eyebrow">Technical Report</p>
+        <p class="eyebrow">Cột phải</p>
         <h2>Chưa có báo cáo</h2>
+        <p>Mở <strong>Cấu hình</strong>, <strong>Lịch sử</strong>, hoặc bắt đầu scan để xem Technical Report tại đây.</p>
       </div>
+
+      <div id="config-panel" class="home-config-panel" hidden></div>
+      <div id="history-panel" class="home-history-panel" hidden></div>
 
       <div id="report-panel" class="home-report-panel" hidden>
         <div class="report-hero">
@@ -71,10 +75,15 @@
             <h2 class="page-title" id="report-title">Technical Report</h2>
             <p class="lede" id="report-target"></p>
           </div>
-          <div class="risk-panel">
-            <span class="muted">Risk</span>
-            <strong id="risk-level">—</strong>
-            <span id="risk-score" class="muted">—/100</span>
+          <div class="risk-actions">
+            <div class="risk-panel">
+              <span class="muted">Risk</span>
+              <strong id="risk-level">—</strong>
+              <span id="risk-score" class="muted">—/100</span>
+            </div>
+            <button type="button" class="ghost-btn" id="export-report-btn" disabled title="Xuất báo cáo HTML">
+              Export Report
+            </button>
           </div>
         </div>
 
@@ -92,9 +101,11 @@
           </dl>
         </section>
 
-        <section class="config-block">
-          <h2>Executive summary</h2>
-          <p id="executive-summary" class="summary">Đang chờ kết quả…</p>
+        <section class="config-block executive-summary-block">
+          <p class="executive-summary-line">
+            <strong class="executive-summary-label">Executive summary</strong>
+            <span id="executive-summary">Đang chờ kết quả…</span>
+          </p>
         </section>
 
         <section class="config-block">
@@ -105,14 +116,16 @@
         </section>
 
         <p class="history-link-note muted">
-          Lưu trong <a href="/history.html">Lịch sử</a> để xem lại sau.
+          Xem lại trong <a href="/?view=history">Lịch sử</a>.
         </p>
       </div>
     </section>
   </main>
 
-  <script src="/api-client.js?v=3"></script>
+  <script src="/api-client.js?v=4"></script>
   <script src="/config-store.js?v=3"></script>
-  <script src="/home.js?v=5"></script>
+  <script src="/configure.js?v=7"></script>
+  <script src="/history.js?v=2"></script>
+  <script src="/home.js?v=14"></script>
 </body>
 </html>

@@ -104,3 +104,4 @@ D:\Security Portal\src\services\SecurityPortal.API\obj\Debug\net10.0\refint\Secu
 D:\Security Portal\src\services\SecurityPortal.API\obj\Debug\net10.0\SecurityPortal.API.pdb
 D:\Security Portal\src\services\SecurityPortal.API\obj\Debug\net10.0\SecurityPortal.API.genruntimeconfig.cache
 D:\Security Portal\src\services\SecurityPortal.API\obj\Debug\net10.0\ref\SecurityPortal.API.dll
+D:\Security Portal\src\services\SecurityPortal.API\obj\Debug\net10.0\SecurityPortal.API.sourcelink.json

@@ -10,3 +10,4 @@ D:\Security Portal\src\shared\SecurityPortal.Contracts\obj\Release\net10.0\Secur
 D:\Security Portal\src\shared\SecurityPortal.Contracts\obj\Release\net10.0\refint\SecurityPortal.Contracts.dll
 D:\Security Portal\src\shared\SecurityPortal.Contracts\obj\Release\net10.0\SecurityPortal.Contracts.pdb
 D:\Security Portal\src\shared\SecurityPortal.Contracts\obj\Release\net10.0\ref\SecurityPortal.Contracts.dll
+D:\Security Portal\src\shared\SecurityPortal.Contracts\obj\Release\net10.0\SecurityPortal.Contracts.sourcelink.json

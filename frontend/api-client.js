@@ -57,6 +57,38 @@ window.SecurityPortalApi = (() => {
       .replaceAll('"', "&quot;");
   }
 
+  /** Soft-wrap long lines so report text fits the panel (~96 chars/line). */
+  function wrapReportLines(value, maxChars = 96) {
+    const text = String(value ?? "");
+    if (!text || maxChars < 24) return text;
+
+    return text.split(/\r?\n/).map((line) => {
+      if (line.length <= maxChars) return line;
+      const parts = [];
+      let rest = line;
+      while (rest.length > maxChars) {
+        const window = rest.slice(0, maxChars + 1);
+        const breakAt = Math.max(
+          window.lastIndexOf(" "),
+          window.lastIndexOf("\t"),
+          window.lastIndexOf(";"),
+          window.lastIndexOf(","),
+          window.lastIndexOf("|"),
+          window.lastIndexOf("/"),
+          window.lastIndexOf("?"),
+          window.lastIndexOf("&"),
+          window.lastIndexOf("="),
+          window.lastIndexOf(":")
+        );
+        const cut = breakAt > maxChars * 0.45 ? breakAt + 1 : maxChars;
+        parts.push(rest.slice(0, cut).trimEnd());
+        rest = rest.slice(cut).trimStart();
+      }
+      if (rest) parts.push(rest);
+      return parts.join("\n");
+    }).join("\n");
+  }
+
   function formatWhen(iso) {
     try {
       return new Date(iso).toLocaleString("vi-VN");
@@ -65,5 +97,5 @@ window.SecurityPortalApi = (() => {
     }
   }
 
-  return { apiFetch, extractError, normalizeUrl, statusClass, severityClass, escapeHtml, formatWhen };
+  return { apiFetch, extractError, normalizeUrl, statusClass, severityClass, escapeHtml, wrapReportLines, formatWhen };
 })();

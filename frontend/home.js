@@ -6,9 +6,12 @@
     statusClass,
     severityClass,
     escapeHtml,
+    wrapReportLines,
     formatWhen,
   } = window.SecurityPortalApi;
   const ConfigStore = window.SecurityPortalConfig;
+  const Configure = window.SecurityPortalConfigure;
+  const HistoryPanel = window.SecurityPortalHistory;
 
   const form = document.getElementById("scan-form");
   const input = document.getElementById("target-url");
@@ -16,10 +19,82 @@
   const formError = document.getElementById("form-error");
   const configSummary = document.getElementById("config-summary");
   const reportPanel = document.getElementById("report-panel");
+  const configPanel = document.getElementById("config-panel");
+  const historyPanel = document.getElementById("history-panel");
+  const placeholder = document.getElementById("report-placeholder");
+  const openConfigBtn = document.getElementById("open-config-btn");
+  const openHistoryBtn = document.getElementById("open-history-btn");
+  const exportReportBtn = document.getElementById("export-report-btn");
+  const navHome = document.querySelector('[data-nav="home"]');
+  const navConfig = document.querySelector('[data-nav="config"]');
+  const navHistory = document.querySelector('[data-nav="history"]');
 
   let catalog = null;
   let pollTimer = null;
   let activeScanId = null;
+  let lastScan = null;
+  let configMount = null;
+  let historyMount = null;
+  let rightView = "placeholder"; // placeholder | report | config | history
+
+  function leavePanelUrl() {
+    const id = activeScanId && activeScanId !== "pending" ? activeScanId : null;
+    return id ? `/?id=${encodeURIComponent(id)}` : "/";
+  }
+
+  function setNavActive(view) {
+    navHome?.classList.toggle("is-active", view === "placeholder" || view === "report");
+    navConfig?.classList.toggle("is-active", view === "config");
+    navHistory?.classList.toggle("is-active", view === "history");
+  }
+
+  function showRight(view) {
+    rightView = view;
+    placeholder.hidden = view !== "placeholder";
+    reportPanel.hidden = view !== "report";
+    configPanel.hidden = view !== "config";
+    historyPanel.hidden = view !== "history";
+    setNavActive(view);
+
+    if (view === "config") {
+      history.replaceState(null, "", "/?view=config");
+      if (!configMount && Configure) {
+        configMount = Configure.mount(configPanel, {
+          onSaved() {
+            renderConfigSnapshot();
+          },
+          onClose() {
+            if (lastScan) showRight("report");
+            else showRight("placeholder");
+            history.replaceState(null, "", leavePanelUrl());
+          },
+        });
+      }
+    } else if (view === "history") {
+      history.replaceState(null, "", "/?view=history");
+      if (!historyMount && HistoryPanel) {
+        historyMount = HistoryPanel.mount(historyPanel, {
+          activeScanId: activeScanId && activeScanId !== "pending" ? activeScanId : null,
+          onSelect(scanId) {
+            showReport(scanId);
+          },
+          onClose() {
+            if (lastScan) showRight("report");
+            else showRight("placeholder");
+            history.replaceState(null, "", leavePanelUrl());
+          },
+        });
+      } else {
+        historyMount?.setActive?.(activeScanId && activeScanId !== "pending" ? activeScanId : null);
+        historyMount?.refresh?.();
+      }
+    } else if (view === "report" && lastScan) {
+      const id = lastScan.id && lastScan.id !== "pending" ? lastScan.id : null;
+      history.replaceState(null, "", id ? `/?id=${encodeURIComponent(id)}` : "/");
+    } else if (view === "placeholder") {
+      history.replaceState(null, "", "/");
+    }
+  }
 
   function getScanConfig() {
     const loaded = ConfigStore.load();
@@ -62,11 +137,29 @@
 
   function openReportPanel(scan) {
     activeScanId = scan.id;
-    const placeholder = document.getElementById("report-placeholder");
-    if (placeholder) placeholder.hidden = true;
-    reportPanel.hidden = false;
+    lastScan = scan;
+    showRight("report");
     renderReport(scan);
   }
+
+  openConfigBtn?.addEventListener("click", () => showRight("config"));
+  openHistoryBtn?.addEventListener("click", () => showRight("history"));
+  exportReportBtn?.addEventListener("click", () => exportReportHtml());
+  navConfig?.addEventListener("click", (event) => {
+    event.preventDefault();
+    showRight("config");
+  });
+  navHistory?.addEventListener("click", (event) => {
+    event.preventDefault();
+    showRight("history");
+  });
+  navHome?.addEventListener("click", (event) => {
+    if (rightView === "config" || rightView === "history") {
+      event.preventDefault();
+      if (lastScan) showRight("report");
+      else showRight("placeholder");
+    }
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -110,12 +203,11 @@
         throw new Error(extractError(data) || `Không thể bắt đầu scan (HTTP ${res.status}).`);
       }
 
-      history.replaceState(null, "", `/?id=${encodeURIComponent(data.id)}`);
       openReportPanel(data);
       startPolling(data.id);
 
       const historyNote = document.querySelector(".history-link-note a");
-      if (historyNote) historyNote.href = `/history.html?id=${encodeURIComponent(data.id)}`;
+      if (historyNote) historyNote.href = `/?view=history`;
     } catch (err) {
       formError.hidden = false;
       formError.textContent = err.message || "Có lỗi xảy ra.";
@@ -135,27 +227,219 @@
     const res = await apiFetch(`/scans/${activeScanId}`, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`Không tải được báo cáo (HTTP ${res.status}).`);
     const scan = await res.json();
-    renderReport(scan);
+    lastScan = scan;
+    if (rightView === "report") renderReport(scan);
     if (scan.status === "Completed" || scan.status === "Failed" || scan.status === "Cancelled") {
       stopPolling();
     }
   }
 
+  function formatFindingResult(f) {
+    const detailHtml = f.detail
+      ? `<p class="finding-detail">${escapeHtml(wrapReportLines(f.detail, 140))}</p>`
+      : "";
+    const evidenceHtml = f.evidence
+      ? `<pre class="finding-evidence">${escapeHtml(wrapReportLines(f.evidence, 120))}</pre>`
+      : "";
+    const steps = Array.isArray(f.reproductionSteps) ? f.reproductionSteps.filter(Boolean) : [];
+    const reproduceHtml = steps.length
+      ? `<div class="finding-reproduce">
+          <p class="finding-reproduce-label">Tái tạo</p>
+          <ol>${steps.map((s) => `<li><code>${escapeHtml(wrapReportLines(s, 120))}</code></li>`).join("")}</ol>
+        </div>`
+      : "";
+    return `
+      <div class="finding-head">
+        <span class="badge ${severityClass(f.severity)}">${escapeHtml(f.severity || "Info")}</span>
+        <strong class="finding-title">${escapeHtml(wrapReportLines(f.title || "—", 100))}</strong>
+      </div>
+      ${detailHtml}
+      ${evidenceHtml}
+      ${reproduceHtml}
+    `;
+  }
+
+  function sanitizeFilePart(value) {
+    return String(value || "report")
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "-")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 120) || "report";
+  }
+
+  function formatExportDate(iso) {
+    const d = iso ? new Date(iso) : new Date();
+    if (Number.isNaN(d.getTime())) return formatExportDate(null);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(d.getFullYear());
+    return `${dd}${mm}${yyyy}`;
+  }
+
+  function buildExportFilename(scan) {
+    const reportName = sanitizeFilePart(scan.report?.reportTitle || "Technical-Report");
+    const datePart = formatExportDate(scan.completedAt || scan.createdAt);
+    const urlPart = sanitizeFilePart(scan.targetUrl || scan.normalizedHost || "target");
+    return `${reportName}-${datePart}-${urlPart}.html`;
+  }
+
+  function buildExportHtml(scan) {
+    const report = scan.report;
+    const findings = report?.findings || [];
+    const findingsRows = findings.length
+      ? findings.map((f, index) => `
+          <tr class="${severityClass(f.severity)}">
+            <td class="col-index">${index + 1}</td>
+            <td class="col-function">${escapeHtml(wrapReportLines(f.checkName || f.checkId || "—", 40))}</td>
+            <td class="col-tool">${escapeHtml(wrapReportLines((f.tools || []).join(", ") || "—", 36))}</td>
+            <td class="col-result">${formatFindingResult(f)}</td>
+            <td class="col-recommend">${escapeHtml(wrapReportLines(f.recommendation || "—", 72))}</td>
+          </tr>`).join("")
+      : `<tr><td colspan="5">Không có finding.</td></tr>`;
+
+    const when = formatWhen(scan.completedAt || scan.createdAt || new Date().toISOString());
+    const httpsText = scan.hasHttps == null ? "—" : (scan.hasHttps ? "Có" : "Không");
+
+    return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(report?.reportTitle || "Technical Report")} — ${escapeHtml(scan.targetUrl || "")}</title>
+  <style>
+    :root { color-scheme: light; --ink:#12202b; --muted:#5b6b76; --line:#d7e0e7; --bg:#f7fafc; --card:#fff; --high:#b42318; --medium:#b54708; --low:#027a48; --info:#175cd3; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.5 system-ui, Segoe UI, sans-serif; color: var(--ink); background: var(--bg); }
+    main { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    h1 { margin: 0.2rem 0 0.35rem; font-size: 1.75rem; letter-spacing: -0.03em; }
+    h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
+    .lede, .muted { color: var(--muted); }
+    .hero { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .risk { min-width: 140px; padding: 0.85rem 1rem; border: 1px solid var(--line); background: var(--card); }
+    .risk strong { display: block; font-size: 1.5rem; }
+    .block { margin: 1rem 0; padding: 1rem 1.1rem; border: 1px solid var(--line); background: var(--card); }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 0.75rem; margin: 0; }
+    .metrics div { margin: 0; }
+    .metrics dt { color: var(--muted); font-size: 0.8rem; }
+    .metrics dd { margin: 0.15rem 0 0; font-weight: 600; }
+    table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { border-bottom: 1px solid var(--line); padding: 0.7rem 0.55rem; vertical-align: top; text-align: left; overflow-wrap: anywhere; word-break: break-word; white-space: pre-line; }
+    .col-index { width: 3.25rem; white-space: nowrap; }
+    .col-function { width: 11%; }
+    .col-tool { width: 10%; }
+    .col-result { width: 52%; }
+    .col-recommend { width: 20%; }
+    .finding-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin: 0; }
+    .finding-title { margin: 0; }
+    th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+    .badge { display: inline-block; padding: 0.12rem 0.45rem; border: 1px solid var(--line); font-size: 0.75rem; margin-right: 0.35rem; }
+    .sev-high .badge, .sev-high { color: var(--high); }
+    .sev-medium .badge, .sev-medium { color: var(--medium); }
+    .sev-low .badge, .sev-low { color: var(--low); }
+    .sev-info .badge, .sev-info { color: var(--info); }
+    .finding-detail { white-space: pre-line; color: var(--muted); margin: 0.4rem 0 0; }
+    .finding-evidence { margin: 0.5rem 0 0; padding: 0.55rem 0.65rem; background: #eef3f7; overflow: auto; font-size: 0.8rem; }
+    .finding-reproduce { margin-top: 0.55rem; padding-top: 0.45rem; border-top: 1px dashed var(--line); }
+    .finding-reproduce-label { margin: 0 0 0.3rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--medium); }
+    .finding-reproduce ol { margin: 0; padding-left: 1.1rem; }
+    .finding-reproduce code { font-size: 0.8rem; word-break: break-word; }
+    .executive-summary-line { margin: 0; width: 100%; line-height: 1.55; color: var(--muted); }
+    .executive-summary-line strong { margin-right: 0.45rem; color: var(--ink); }
+    .footer { margin-top: 1.5rem; color: var(--muted); font-size: 0.85rem; }
+    @media (max-width: 720px) { .metrics { grid-template-columns: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div>
+        <p class="muted">Security Portal</p>
+        <h1>${escapeHtml(report?.reportTitle || "Technical Report")}</h1>
+        <p class="lede">${escapeHtml(wrapReportLines(scan.targetUrl || "", 100))}</p>
+        <p class="muted">Xuất lúc ${escapeHtml(when)} · Status: ${escapeHtml(scan.status || "—")}</p>
+      </div>
+      <div class="risk">
+        <span class="muted">Risk</span>
+        <strong class="${severityClass(report?.riskLevel)}">${escapeHtml(report?.riskLevel || "—")}</strong>
+        <span class="muted">${escapeHtml(String(report?.riskScore ?? "—"))}/100</span>
+      </div>
+    </header>
+
+    <section class="block">
+      <h2>Trạng thái scan</h2>
+      <p>${escapeHtml(wrapReportLines(scan.errorMessage || scan.summary || "—", 110))}</p>
+      <dl class="metrics">
+        <div><dt>HTTP</dt><dd>${escapeHtml(String(scan.httpStatusCode ?? "—"))}</dd></div>
+        <div><dt>Thời gian</dt><dd>${escapeHtml(scan.responseTimeMs != null ? `${scan.responseTimeMs} ms` : "—")}</dd></div>
+        <div><dt>HTTPS</dt><dd>${escapeHtml(httpsText)}</dd></div>
+        <div><dt>Server</dt><dd>${escapeHtml(wrapReportLines(scan.serverHeader || "—", 40))}</dd></div>
+      </dl>
+    </section>
+
+    <section class="block">
+      <p class="executive-summary-line"><strong>Executive summary</strong> ${escapeHtml(wrapReportLines(report?.executiveSummary || "—", 120))}</p>
+    </section>
+
+    <section class="block">
+      <h2>Findings</h2>
+      <table>
+        <thead>
+          <tr>
+            <th class="col-index">Index</th>
+            <th class="col-function">Function</th>
+            <th class="col-tool">Tool</th>
+            <th class="col-result">Result</th>
+            <th class="col-recommend">Recommend</th>
+          </tr>
+        </thead>
+        <tbody>${findingsRows}</tbody>
+      </table>
+    </section>
+
+    <p class="footer">Generated by Security Portal · file standalone HTML</p>
+  </main>
+</body>
+</html>`;
+  }
+
+  function exportReportHtml() {
+    if (!lastScan?.report) return;
+    const filename = buildExportFilename(lastScan);
+    const html = buildExportHtml(lastScan);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function setExportEnabled(enabled) {
+    if (!exportReportBtn) return;
+    exportReportBtn.disabled = !enabled;
+  }
+
   function renderReport(scan) {
-    document.getElementById("report-title").textContent = scan.report?.reportTitle || "Security Report";
-    document.getElementById("report-target").textContent = scan.targetUrl || "";
+    document.getElementById("report-title").textContent = scan.report?.reportTitle || "Technical Report";
+    document.getElementById("report-target").textContent = wrapReportLines(scan.targetUrl || "", 100);
 
     const badge = document.getElementById("status-badge");
     badge.textContent = scan.status || "Queued";
     badge.className = "badge " + statusClass(scan.status);
     document.getElementById("status-summary").textContent =
-      scan.errorMessage || scan.summary || "Đang xử lý Security Report…";
+      wrapReportLines(scan.errorMessage || scan.summary || "Đang xử lý Security Report…", 110);
     document.getElementById("metric-http").textContent = scan.httpStatusCode ?? "—";
     document.getElementById("metric-time").textContent =
       scan.responseTimeMs != null ? `${scan.responseTimeMs} ms` : "—";
     document.getElementById("metric-https").textContent =
       scan.hasHttps == null ? "—" : (scan.hasHttps ? "Có" : "Không");
-    document.getElementById("metric-server").textContent = scan.serverHeader || "—";
+    document.getElementById("metric-server").textContent = wrapReportLines(scan.serverHeader || "—", 40);
 
     const report = scan.report;
     if (!report) {
@@ -166,13 +450,15 @@
         "Security Report đang được tạo theo cấu hình đã lưu…";
       document.getElementById("findings-list").innerHTML =
         "<p class='muted'>Findings sẽ hiển thị khi scan hoàn tất.</p>";
+      setExportEnabled(false);
       return;
     }
 
     document.getElementById("risk-level").textContent = report.riskLevel;
     document.getElementById("risk-level").className = severityClass(report.riskLevel);
     document.getElementById("risk-score").textContent = `${report.riskScore}/100`;
-    document.getElementById("executive-summary").textContent = report.executiveSummary;
+    document.getElementById("executive-summary").textContent = wrapReportLines(report.executiveSummary || "", 120);
+    setExportEnabled(true);
 
     const findings = report.findings || [];
     if (!findings.length) {
@@ -184,26 +470,21 @@
       <table class="findings-table">
         <thead>
           <tr>
-            <th scope="col">Index</th>
-            <th scope="col">Function</th>
-            <th scope="col">Tool</th>
-            <th scope="col">Result</th>
-            <th scope="col">Recommend</th>
+            <th scope="col" class="col-index">Index</th>
+            <th scope="col" class="col-function">Function</th>
+            <th scope="col" class="col-tool">Tool</th>
+            <th scope="col" class="col-result">Result</th>
+            <th scope="col" class="col-recommend">Recommend</th>
           </tr>
         </thead>
         <tbody>
           ${findings.map((f, index) => `
             <tr class="${severityClass(f.severity)}">
               <td class="col-index">${index + 1}</td>
-              <td class="col-function">${escapeHtml(f.checkName || f.checkId || "—")}</td>
-              <td class="col-tool">${escapeHtml((f.tools || []).join(", ") || "—")}</td>
-              <td class="col-result">
-                <span class="badge ${severityClass(f.severity)}">${escapeHtml(f.severity || "Info")}</span>
-                <strong>${escapeHtml(f.title || "—")}</strong>
-                <p>${escapeHtml(f.detail || "")}</p>
-                ${f.evidence ? `<pre>${escapeHtml(f.evidence)}</pre>` : ""}
-              </td>
-              <td class="col-recommend">${escapeHtml(f.recommendation || "—")}</td>
+              <td class="col-function">${escapeHtml(wrapReportLines(f.checkName || f.checkId || "—", 40))}</td>
+              <td class="col-tool">${escapeHtml(wrapReportLines((f.tools || []).join(", ") || "—", 36))}</td>
+              <td class="col-result">${formatFindingResult(f)}</td>
+              <td class="col-recommend">${escapeHtml(wrapReportLines(f.recommendation || "—", 72))}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -242,11 +523,22 @@
     }
   }
 
+  document.querySelector(".history-link-note")?.addEventListener("click", (event) => {
+    const link = event.target.closest("a");
+    if (!link) return;
+    event.preventDefault();
+    showRight("history");
+  });
+
   const params = new URLSearchParams(window.location.search);
   const initialId = params.get("id");
+  const initialView = params.get("view");
 
   loadCatalog().then(async () => {
-    if (initialId) await showReport(initialId);
+    if (initialView === "config") showRight("config");
+    else if (initialView === "history") showRight("history");
+    else if (initialId) await showReport(initialId);
+    else showRight("placeholder");
   });
 
   input.focus();
