@@ -31,8 +31,10 @@
 
   let catalog = null;
   let pollTimer = null;
+  let progressTimer = null;
   let activeScanId = null;
   let lastScan = null;
+  let scanProgressStartedAt = null;
   let configMount = null;
   let historyMount = null;
   let rightView = "placeholder"; // placeholder | report | config | history
@@ -77,6 +79,14 @@
           activeScanId: activeScanId && activeScanId !== "pending" ? activeScanId : null,
           onSelect(scanId) {
             showReport(scanId);
+          },
+          onDeleted(ids) {
+            const removedActive = ids.some((id) => id === activeScanId);
+            if (removedActive) {
+              stopPolling();
+              activeScanId = null;
+              lastScan = null;
+            }
           },
           onClose() {
             if (lastScan) showRight("report");
@@ -138,6 +148,11 @@
   function openReportPanel(scan) {
     activeScanId = scan.id;
     lastScan = scan;
+    if (isScanInProgress(scan.status)) {
+      scanProgressStartedAt = Date.now();
+    } else {
+      scanProgressStartedAt = null;
+    }
     showRight("report");
     renderReport(scan);
   }
@@ -215,6 +230,7 @@
       document.getElementById("status-badge").className = "badge is-failed";
       document.getElementById("status-summary").textContent = err.message || "Scan thất bại.";
       document.getElementById("executive-summary").textContent = err.message || "Không tạo được Security Report.";
+      updateScanProgressUi({ status: "Failed" });
       stopPolling();
     } finally {
       scanBtn.disabled = false;
@@ -231,6 +247,7 @@
     if (rightView === "report") renderReport(scan);
     if (scan.status === "Completed" || scan.status === "Failed" || scan.status === "Cancelled") {
       stopPolling();
+      scanProgressStartedAt = null;
     }
   }
 
@@ -348,6 +365,9 @@
     .finding-reproduce code { font-size: 0.8rem; word-break: break-word; }
     .executive-summary-line { margin: 0; width: 100%; line-height: 1.55; color: var(--muted); }
     .executive-summary-line strong { margin-right: 0.45rem; color: var(--ink); }
+    .risk-legend { margin: 0.55rem 0 0; display: grid; gap: 0.3rem; color: var(--muted); font-size: 0.84rem; line-height: 1.45; }
+    .risk-legend-title { font-weight: 600; color: var(--ink); }
+    .risk-legend-scale { display: flex; flex-wrap: wrap; gap: 0.55rem 1rem; font-weight: 600; }
     .footer { margin-top: 1.5rem; color: var(--muted); font-size: 0.85rem; }
     @media (max-width: 720px) { .metrics { grid-template-columns: 1fr 1fr; } }
   </style>
@@ -359,6 +379,15 @@
         <p class="muted">Security Portal</p>
         <h1>${escapeHtml(report?.reportTitle || "Technical Report")}</h1>
         <p class="lede">${escapeHtml(wrapReportLines(scan.targetUrl || "", 100))}</p>
+        <p class="risk-legend">
+          <span class="risk-legend-title">Cách đọc Risk</span>
+          <span class="risk-legend-scale">
+            <span class="sev-high">≥ 70: High</span>
+            <span class="sev-medium">40–69: Medium</span>
+            <span class="sev-low">&lt; 40: Low</span>
+          </span>
+          <span>Điểm = tổng finding (High +25, Medium +12, Low +5, Info +0), tối đa 100. Điểm càng thấp càng tốt — 0/100 an toàn nhất, 100/100 rủi ro cao nhất.</span>
+        </p>
         <p class="muted">Xuất lúc ${escapeHtml(when)} · Status: ${escapeHtml(scan.status || "—")}</p>
       </div>
       <div class="risk">
@@ -425,13 +454,98 @@
     exportReportBtn.disabled = !enabled;
   }
 
+  function isScanInProgress(status) {
+    return status === "Queued" || status === "Running" || status === "pending";
+  }
+
+  function estimateScanProgress(scan) {
+    const status = scan?.status || "Queued";
+    if (status === "Completed") return 100;
+    if (status === "Failed" || status === "Cancelled") return 100;
+
+    const started = scanProgressStartedAt
+      || (scan.startedAt ? new Date(scan.startedAt).getTime() : null)
+      || (scan.createdAt ? new Date(scan.createdAt).getTime() : Date.now());
+    const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
+
+    if (status === "Queued" || status === "pending") {
+      return Math.min(12, 4 + elapsedSec * 1.5);
+    }
+
+    // Running: asymptotic toward 92% until API completes
+    const expectedSec = 18;
+    const ratio = 1 - Math.exp(-elapsedSec / expectedSec);
+    let pct = 12 + ratio * 80;
+    if (scan.httpStatusCode != null) pct = Math.max(pct, 55);
+    if (scan.serverHeader) pct = Math.max(pct, 68);
+    if (scan.report) pct = Math.max(pct, 88);
+    return Math.min(92, Math.round(pct));
+  }
+
+  function stopProgressTicker() {
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+  }
+
+  function startProgressTicker() {
+    stopProgressTicker();
+    progressTimer = setInterval(() => {
+      if (!lastScan || !isScanInProgress(lastScan.status) || lastScan.status === "pending") {
+        if (lastScan) updateScanProgressUi(lastScan);
+        return;
+      }
+      updateScanProgressUi(lastScan);
+    }, 400);
+  }
+
+  function updateScanProgressUi(scan) {
+    const progressEl = document.getElementById("scan-progress");
+    const trackEl = document.getElementById("scan-progress-track");
+    const fillEl = document.getElementById("scan-progress-fill");
+    const labelEl = document.getElementById("scan-progress-label");
+    const pctEl = document.getElementById("scan-progress-pct");
+    const summaryEl = document.getElementById("executive-summary");
+    if (!progressEl || !trackEl || !fillEl || !labelEl || !pctEl || !summaryEl) return;
+
+    const status = scan?.status || "";
+    const inProgress = isScanInProgress(status);
+
+    if (!inProgress) {
+      progressEl.hidden = true;
+      trackEl.hidden = true;
+      fillEl.style.width = status === "Completed" ? "100%" : "0%";
+      stopProgressTicker();
+      return;
+    }
+
+    if (!scanProgressStartedAt) {
+      scanProgressStartedAt = scan.startedAt
+        ? new Date(scan.startedAt).getTime()
+        : (scan.createdAt ? new Date(scan.createdAt).getTime() : Date.now());
+    }
+
+    const pct = estimateScanProgress(scan);
+    progressEl.hidden = false;
+    trackEl.hidden = false;
+    fillEl.style.width = `${pct}%`;
+    pctEl.textContent = `${pct}%`;
+    labelEl.textContent = status === "Queued" || status === "pending"
+      ? "Đang xếp hàng…"
+      : "Đang scan…";
+    summaryEl.textContent = scan.report?.executiveSummary
+      ? wrapReportLines(scan.report.executiveSummary, 120)
+      : "Security Report đang được tạo — vui lòng chờ trong giây lát.";
+  }
+
   function renderReport(scan) {
     document.getElementById("report-title").textContent = scan.report?.reportTitle || "Technical Report";
     document.getElementById("report-target").textContent = wrapReportLines(scan.targetUrl || "", 100);
 
     const badge = document.getElementById("status-badge");
-    badge.textContent = scan.status || "Queued";
-    badge.className = "badge " + statusClass(scan.status);
+    badge.textContent = scan.status === "pending" ? "Queued" : (scan.status || "Queued");
+    badge.className = "badge " + statusClass(scan.status === "pending" ? "Queued" : scan.status);
     document.getElementById("status-summary").textContent =
       wrapReportLines(scan.errorMessage || scan.summary || "Đang xử lý Security Report…", 110);
     document.getElementById("metric-http").textContent = scan.httpStatusCode ?? "—";
@@ -441,13 +555,18 @@
       scan.hasHttps == null ? "—" : (scan.hasHttps ? "Có" : "Không");
     document.getElementById("metric-server").textContent = wrapReportLines(scan.serverHeader || "—", 40);
 
+    updateScanProgressUi(scan);
+    if (isScanInProgress(scan.status)) startProgressTicker();
+
     const report = scan.report;
     if (!report) {
       document.getElementById("risk-level").textContent = "—";
       document.getElementById("risk-level").className = "";
       document.getElementById("risk-score").textContent = "—/100";
-      document.getElementById("executive-summary").textContent =
-        "Security Report đang được tạo theo cấu hình đã lưu…";
+      if (!isScanInProgress(scan.status)) {
+        document.getElementById("executive-summary").textContent =
+          "Security Report đang được tạo theo cấu hình đã lưu…";
+      }
       document.getElementById("findings-list").innerHTML =
         "<p class='muted'>Findings sẽ hiển thị khi scan hoàn tất.</p>";
       setExportEnabled(false);
@@ -457,8 +576,10 @@
     document.getElementById("risk-level").textContent = report.riskLevel;
     document.getElementById("risk-level").className = severityClass(report.riskLevel);
     document.getElementById("risk-score").textContent = `${report.riskScore}/100`;
-    document.getElementById("executive-summary").textContent = wrapReportLines(report.executiveSummary || "", 120);
-    setExportEnabled(true);
+    if (!isScanInProgress(scan.status)) {
+      document.getElementById("executive-summary").textContent = wrapReportLines(report.executiveSummary || "", 120);
+    }
+    setExportEnabled(!isScanInProgress(scan.status));
 
     const findings = report.findings || [];
     if (!findings.length) {
@@ -497,11 +618,14 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    stopProgressTicker();
   }
 
   function startPolling(scanId) {
     activeScanId = scanId;
+    if (!scanProgressStartedAt) scanProgressStartedAt = Date.now();
     stopPolling();
+    startProgressTicker();
     pollTimer = setInterval(() => {
       refreshReport().catch(() => {});
     }, 2000);

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=17" />
+  <link rel="stylesheet" href="/styles.css?v=21" />
 </head>
 <body class="page-home">
   <div class="atmosphere" aria-hidden="true"></div>
@@ -74,6 +74,18 @@
             <p class="eyebrow">Technical Report</p>
             <h2 class="page-title" id="report-title">Technical Report</h2>
             <p class="lede" id="report-target"></p>
+            <p class="risk-legend" id="risk-legend">
+              <span class="risk-legend-title">Cách đọc Risk</span>
+              <span class="risk-legend-scale">
+                <span class="sev-high">≥ 70: High</span>
+                <span class="sev-medium">40–69: Medium</span>
+                <span class="sev-low">&lt; 40: Low</span>
+              </span>
+              <span class="risk-legend-formula">
+                Điểm = tổng finding (High +25, Medium +12, Low +5, Info +0), tối đa 100.
+                Điểm càng thấp càng tốt — 0/100 là an toàn nhất, 100/100 là rủi ro cao nhất.
+              </span>
+            </p>
           </div>
           <div class="risk-actions">
             <div class="risk-panel">
@@ -104,8 +116,16 @@
         <section class="config-block executive-summary-block">
           <p class="executive-summary-line">
             <strong class="executive-summary-label">Executive summary</strong>
+            <span id="scan-progress" class="scan-progress" hidden>
+              <span class="scan-spinner" aria-hidden="true"></span>
+              <span id="scan-progress-label">Đang scan…</span>
+              <span id="scan-progress-pct" class="scan-progress-pct"></span>
+            </span>
             <span id="executive-summary">Đang chờ kết quả…</span>
           </p>
+          <div id="scan-progress-track" class="scan-progress-track" hidden>
+            <div id="scan-progress-fill" class="scan-progress-fill"></div>
+          </div>
         </section>
 
         <section class="config-block">
@@ -125,7 +145,7 @@
   <script src="/api-client.js?v=4"></script>
   <script src="/config-store.js?v=3"></script>
   <script src="/configure.js?v=7"></script>
-  <script src="/history.js?v=2"></script>
-  <script src="/home.js?v=14"></script>
+  <script src="/history.js?v=4"></script>
+  <script src="/home.js?v=17"></script>
 </body>
 </html>

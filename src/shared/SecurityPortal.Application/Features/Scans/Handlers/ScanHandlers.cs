@@ -58,3 +58,23 @@ public class GetScanCatalogQueryHandler : IRequestHandler<GetScanCatalogQuery, S
     public Task<ScanCatalogDto> Handle(GetScanCatalogQuery request, CancellationToken cancellationToken) =>
         Task.FromResult(WebsiteScanMappings.ToCatalogDto());
 }
+
+public class DeleteWebsiteScansCommandHandler(IWebsiteScanRepository scanRepository)
+    : IRequestHandler<DeleteWebsiteScansCommand, DeleteWebsiteScansResultDto>
+{
+    public async Task<DeleteWebsiteScansResultDto> Handle(
+        DeleteWebsiteScansCommand request,
+        CancellationToken cancellationToken)
+    {
+        var ids = (request.Ids ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        if (ids.Count == 0)
+            return new DeleteWebsiteScansResultDto(0);
+
+        var deleted = await scanRepository.DeleteByIdsAsync(ids, cancellationToken);
+        return new DeleteWebsiteScansResultDto(deleted);
+    }
+}

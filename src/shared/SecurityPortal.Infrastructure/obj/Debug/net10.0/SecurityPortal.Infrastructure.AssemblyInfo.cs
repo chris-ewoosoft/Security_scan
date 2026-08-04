@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyCopyrightAttribute("Copyright © SecurityPortal 2024")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+63ee3e7cd90e355c1bd414752ff32a1e808ad91b")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5263a5730fc756de0fbe9b58fa632bdaa5731bb3")]
 [assembly: System.Reflection.AssemblyProductAttribute("SecurityPortal.Infrastructure")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SecurityPortal.Infrastructure")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -10,3 +10,5 @@ public record StartWebsiteScanCommand(
     string? ReportType = null,
     Guid? UserId = null,
     Guid? OrganizationId = null) : IRequest<WebsiteScanDto>;
+
+public record DeleteWebsiteScansCommand(IReadOnlyList<Guid> Ids) : IRequest<DeleteWebsiteScansResultDto>;

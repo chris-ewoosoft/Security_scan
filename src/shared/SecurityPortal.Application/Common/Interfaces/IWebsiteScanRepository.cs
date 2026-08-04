@@ -8,4 +8,5 @@ public interface IWebsiteScanRepository
     Task<WebsiteScan?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<WebsiteScan>> GetQueuedAsync(int take, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<WebsiteScan>> GetRecentAsync(int take, CancellationToken cancellationToken = default);
+    Task<int> DeleteByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
 }

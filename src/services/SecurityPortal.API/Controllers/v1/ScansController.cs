@@ -56,4 +56,19 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
         var result = await Mediator.Send(new ListRecentWebsiteScansQuery(take));
         return Ok(result);
     }
+
+    /// <summary>Delete one or more website scans from history</summary>
+    [AllowAnonymous]
+    [HttpDelete]
+    [ProducesResponseType(typeof(DeleteWebsiteScansResultDto), 200)]
+    [ProducesResponseType(422)]
+    public async Task<IActionResult> Delete([FromBody] DeleteWebsiteScansRequest request)
+    {
+        var ids = request?.Ids ?? [];
+        if (ids.Count == 0)
+            return UnprocessableEntity(new { detail = "Chọn ít nhất một scan để xóa." });
+
+        var result = await Mediator.Send(new DeleteWebsiteScansCommand(ids));
+        return Ok(result);
+    }
 }

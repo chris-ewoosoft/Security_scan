@@ -246,6 +246,174 @@ body.page-config .atmosphere {
   margin-bottom: 0.75rem;
 }
 
+.history-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.history-hero-actions .danger-btn:not(:disabled) {
+  border-color: rgba(239, 107, 107, 0.45);
+  color: var(--danger);
+}
+
+.history-hero-actions .danger-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.history-status {
+  margin: 0.35rem 0 0.55rem;
+}
+
+.history-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  border: 1px solid var(--line);
+  background: rgba(7, 16, 24, 0.35);
+}
+
+.history-table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.history-table th,
+.history-table td {
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.history-table thead th {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.22);
+  white-space: nowrap;
+}
+
+.history-table tbody tr {
+  cursor: pointer;
+}
+
+.history-table tbody tr:hover .url {
+  color: var(--teal-bright);
+}
+
+.history-table tbody tr.is-active {
+  background: rgba(63, 224, 197, 0.08);
+}
+
+.history-table tbody tr.is-active .url {
+  color: var(--teal-bright);
+}
+
+.history-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.history-table .col-select {
+  width: 7.5rem;
+  text-align: center;
+}
+
+.history-table thead th.col-select {
+  text-align: center;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.history-table thead th.col-select .history-select-all {
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.history-table tbody td.col-select {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.history-table .col-when {
+  width: 22%;
+  color: var(--muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.history-table .col-url {
+  width: 33.333%;
+}
+
+.history-table .col-url .url {
+  display: block;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-table .col-status {
+  width: auto;
+}
+
+.history-table tr.history-empty {
+  cursor: default;
+}
+
+.history-table tr.history-empty td {
+  color: var(--muted);
+  padding: 1rem 0.75rem;
+}
+
+.history-select-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+  user-select: none;
+  margin: 0;
+}
+
+.history-select-all input,
+.history-check input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--teal-bright);
+}
+
+.history-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  cursor: pointer;
+}
+
+.history-list li {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0.75rem 0.9rem;
+}
+
+.history-list li.history-empty {
+  cursor: default;
+  grid-template-columns: 1fr;
+}
+
 .home-report-panel {
   animation: rise 0.45s ease-out both;
 }
@@ -617,6 +785,63 @@ body.page-config .topbar {
   color: var(--muted);
 }
 
+.scan-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: 0.55rem;
+  color: var(--amber);
+  font-size: 0.92rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.scan-progress[hidden] {
+  display: none !important;
+}
+
+.scan-spinner {
+  width: 0.95rem;
+  height: 0.95rem;
+  border: 2px solid rgba(232, 165, 75, 0.25);
+  border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: scan-spin 0.75s linear infinite;
+  flex: 0 0 auto;
+}
+
+.scan-progress-pct {
+  min-width: 2.4rem;
+  color: var(--teal-bright);
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-progress-track {
+  margin-top: 0.55rem;
+  width: 100%;
+  max-width: 28rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.scan-progress-track[hidden] {
+  display: none !important;
+}
+
+.scan-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), var(--amber));
+  transition: width 0.35s ease;
+}
+
+@keyframes scan-spin {
+  to { transform: rotate(360deg); }
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -883,11 +1108,31 @@ body.page-config .topbar {
   margin-bottom: 1.25rem;
 }
 
-.risk-actions {
+.risk-legend {
+  margin: 0.55rem 0 0;
+  max-width: 42rem;
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.risk-legend-title {
+  font-weight: 600;
+  color: var(--fog);
+  letter-spacing: 0.02em;
+}
+
+.risk-legend-scale {
   display: flex;
-  align-items: stretch;
-  gap: 0.75rem;
   flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  font-weight: 600;
+}
+
+.risk-legend-formula {
+  color: var(--muted);
 }
 
 .risk-actions .ghost-btn {

@@ -25,4 +25,12 @@ public class WebsiteScanRepository(ApplicationDbContext context) : IWebsiteScanR
             .OrderByDescending(s => s.CreatedAt)
             .Take(take)
             .ToListAsync(cancellationToken);
+
+    public async Task<int> DeleteByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0) return 0;
+        return await context.WebsiteScans
+            .Where(s => ids.Contains(s.Id))
+            .ExecuteDeleteAsync(cancellationToken);
+    }
 }

@@ -26,6 +26,10 @@ public record ScanToolDto(string Id, string Name, string Kind, string Descriptio
 
 public record ScanReportDto(string Id, string Name, string Description);
 
+public record DeleteWebsiteScansRequest(IReadOnlyList<Guid> Ids);
+
+public record DeleteWebsiteScansResultDto(int Deleted);
+
 public record ScanFindingDto(
     string CheckId,
     string CheckName,
