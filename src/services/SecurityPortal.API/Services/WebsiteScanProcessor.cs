@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using SecurityPortal.Application.Common.Interfaces;
 using SecurityPortal.Application.Features.Scans.DTOs;
 using SecurityPortal.Domain.Entities;
@@ -502,7 +505,13 @@ public sealed class WebsiteScanProcessor(
             "admin", "login", "dashboard", "api", "swagger", "graphql",
             "backup", "uploads", "static", "assets", "wp-admin", "robots.txt", "sitemap.xml"
         };
-        var found = new List<(string Path, int Code, string Url)>();
+
+        var baseline = await ProbeUrlAsync(
+            client,
+            new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__/").ToString(),
+            cancellationToken);
+
+        var found = new List<(string Path, int Code, string Url, string Note)>();
 
         foreach (var path in paths)
         {
@@ -510,10 +519,21 @@ public sealed class WebsiteScanProcessor(
             try
             {
                 var url = new Uri(baseUri, path).ToString();
-                using var res = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                var code = (int)res.StatusCode;
-                if (code is >= 200 and < 400 or 401 or 403)
-                    found.Add((path, code, url));
+                var probe = await ProbeUrlAsync(client, url, cancellationToken);
+                if (probe is null) continue;
+
+                var code = probe.StatusCode;
+                if (code is 401 or 403)
+                {
+                    found.Add((path, code, url, "auth/forbidden"));
+                    continue;
+                }
+
+                if (code is < 200 or >= 400) continue;
+                if (IsSoft404OrSpaFallback(probe, baseline, path, allowHtml: true)) continue;
+
+                // Directory/path hits: accept distinct content from baseline (HTML login/admin hợp lệ)
+                found.Add((path, code, url, probe.ContentType ?? "unknown"));
             }
             catch
             {
@@ -529,13 +549,13 @@ public sealed class WebsiteScanProcessor(
                 Finding(check, tools, "Medium",
                     $"Directory probe: {found.Count} path phản hồi",
                     ObservedImpact(
-                        $"Wordlist ngắn phát hiện {found.Count} path (200–403): {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}.",
+                        $"Wordlist ngắn phát hiện {found.Count} path (đã lọc soft-404/SPA): {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}.",
                         "Path admin/backup/API lộ diện giúp attacker tập trung brute-force hoặc khai thác panel."),
-                    string.Join("; ", found.Select(f => $"{f.Url} → {f.Code}")),
+                    string.Join("; ", found.Select(f => $"{f.Url} → {f.Code} [{f.Note}]")),
                     "Ẩn/ bảo vệ panel admin (IP allowlist, SSO); tắt directory listing; gắn Feroxbuster/FFUF cho discovery sâu.",
                     Steps(
                         $"curl -sI \"{sample.Url}\"",
-                        $"Xác nhận status {sample.Code} (không phải 404).",
+                        $"Xác nhận status {sample.Code} và nội dung không phải trang HTML fallback.",
                         "Mở URL trên browser (nếu 200) hoặc ghi nhận trang login/403.",
                         "Sau khi hạn chế truy cập, lặp lại curl — kỳ vọng 404 hoặc chặn bởi WAF."))
             ];
@@ -545,7 +565,7 @@ public sealed class WebsiteScanProcessor(
         [
             Finding(check, tools, "Info",
                 "Directory probe: không thấy path phổ biến",
-                "Wordlist ngắn built-in. Full discovery cần Feroxbuster/FFUF trên worker.",
+                "Wordlist ngắn built-in (đã loại soft-404). Full discovery cần Feroxbuster/FFUF trên worker.",
                 null,
                 "Ẩn/ bảo vệ panel admin; gắn Feroxbuster hoặc FFUF cho discovery sâu.")
         ];
@@ -561,7 +581,14 @@ public sealed class WebsiteScanProcessor(
             "backup.sql", "dump.sql", "config.php", "phpinfo.php", ".DS_Store",
             "id_rsa", "server-status", "actuator/env", "api/swagger.json"
         };
-        var hits = new List<(string Path, int Code, string Url)>();
+
+        // Baseline: path chắc chắn không tồn tại — dùng để phát hiện soft-404 / SPA fallback (HTTP 200 + HTML).
+        var baseline = await ProbeUrlAsync(
+            client,
+            new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__.txt").ToString(),
+            cancellationToken);
+
+        var hits = new List<(string Path, int Code, string Url, string EvidenceNote)>();
 
         foreach (var path in paths)
         {
@@ -569,10 +596,17 @@ public sealed class WebsiteScanProcessor(
             try
             {
                 var url = new Uri(baseUri, path).ToString();
-                using var res = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                var code = (int)res.StatusCode;
-                if (code is >= 200 and < 300)
-                    hits.Add((path, code, url));
+                var probe = await ProbeUrlAsync(client, url, cancellationToken);
+                if (probe is null) continue;
+                if (probe.StatusCode is < 200 or >= 300) continue;
+                if (IsSoft404OrSpaFallback(probe, baseline, path, allowHtml: false)) continue;
+                if (!LooksLikeSensitiveContent(path, probe)) continue;
+
+                hits.Add((
+                    path,
+                    probe.StatusCode,
+                    url,
+                    $"ctype={probe.ContentType ?? "—"}; bytes={probe.BodyLength}; marker=validated"));
             }
             catch
             {
@@ -587,25 +621,167 @@ public sealed class WebsiteScanProcessor(
             [
                 Finding(check, tools, "High", "Phát hiện file/path nhạy cảm có thể truy cập",
                     ObservedImpact(
-                        $"Các path trả HTTP 2xx: {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}.",
+                        $"Các path trả HTTP 2xx và đã xác thực nội dung (không phải soft-404/SPA): {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}.",
                         "File cấu hình/backup/source có thể chứa secret, credential hoặc lộ cấu trúc hệ thống."),
-                    string.Join("; ", hits.Select(h => $"{h.Url} → {h.Code}")),
+                    string.Join("; ", hits.Select(h => $"{h.Url} → {h.Code}; {h.EvidenceNote}")),
                     "Gỡ file nhạy cảm khỏi web root ngay; chặn bằng server/WAF rules; rotate secret nếu đã lộ; chạy Nuclei định kỳ.",
                     Steps(
                         $"curl -sI \"{sample.Url}\"",
-                        $"Xác nhận HTTP {sample.Code}. Không tải/chia sẻ nội dung nếu nghi có secret.",
-                        $"curl -s \"{sample.Url}\" | head  # chỉ để xác nhận có body (cẩn thận với dữ liệu nhạy cảm)",
-                        "Sau khi gỡ/chặn: cùng URL phải trả 404/403."))
+                        $"Xác nhận HTTP {sample.Code} và Content-Type phù hợp file thật (không phải text/html trang chủ).",
+                        $"curl -s \"{sample.Url}\" | head  # đối chiếu nội dung có marker đặc trưng (cẩn thận secret)",
+                        "Sau khi gỡ/chặn: cùng URL phải trả 404/403 (không còn soft-404 HTML)."))
             ];
         }
 
         return
         [
             Finding(check, tools, "Info", "Không thấy sensitive path phổ biến (probe ngắn)",
-                "Chưa phát hiện các file trong wordlist cơ bản. Nuclei sẽ bao phủ rộng hơn.",
-                null,
+                "Đã lọc soft-404/SPA fallback (HTTP 200 giả). Chưa phát hiện file trong wordlist cơ bản sau khi xác thực nội dung.",
+                baseline is null
+                    ? null
+                    : $"baseline_status={baseline.StatusCode}; baseline_ctype={baseline.ContentType ?? "—"}",
                 "Giữ Nuclei trong pipeline CI/CD cho scan sâu.")
         ];
+    }
+
+    private sealed record UrlProbe(
+        int StatusCode,
+        string? ContentType,
+        string BodySample,
+        string FinalUrl,
+        int BodyLength,
+        string BodyFingerprint);
+
+    private static async Task<UrlProbe?> ProbeUrlAsync(HttpClient client, string url, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation("Accept", "*/*");
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var status = (int)response.StatusCode;
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+        var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? url;
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var buffer = new byte[4096];
+        var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+        var sample = Encoding.UTF8.GetString(buffer, 0, read);
+        var fingerprint = Convert.ToHexString(SHA256.HashData(buffer.AsSpan(0, read)));
+
+        return new UrlProbe(status, contentType, sample, finalUrl, read, fingerprint);
+    }
+
+    private static bool IsSoft404OrSpaFallback(
+        UrlProbe probe,
+        UrlProbe? baseline,
+        string requestedPath,
+        bool allowHtml)
+    {
+        // Redirected away from the requested path → thường là catch-all / login / home.
+        if (!FinalUrlMatchesPath(probe.FinalUrl, requestedPath))
+            return true;
+
+        if (baseline is not null
+            && probe.StatusCode == baseline.StatusCode
+            && string.Equals(probe.ContentType, baseline.ContentType, StringComparison.OrdinalIgnoreCase)
+            && (probe.BodyFingerprint == baseline.BodyFingerprint
+                || BodiesNearlyIdentical(probe.BodySample, baseline.BodySample)))
+        {
+            return true;
+        }
+
+        // Sensitive files: SPA / soft-404 thường trả HTML shell thay vì file thật.
+        if (!allowHtml && !PathExpectsHtml(requestedPath))
+        {
+            if (LooksLikeHtmlDocument(probe.BodySample))
+                return true;
+            if (IsHtmlContentType(probe.ContentType))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool FinalUrlMatchesPath(string finalUrl, string requestedPath)
+    {
+        if (!Uri.TryCreate(finalUrl, UriKind.Absolute, out var uri))
+            return false;
+
+        var path = uri.AbsolutePath.TrimEnd('/');
+        var expected = "/" + requestedPath.TrimStart('/');
+        return path.EndsWith(expected, StringComparison.OrdinalIgnoreCase)
+               || path.Equals(expected, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool BodiesNearlyIdentical(string a, string b)
+    {
+        var na = NormalizeBody(a);
+        var nb = NormalizeBody(b);
+        if (na.Length == 0 || nb.Length == 0) return na.Length == nb.Length;
+        var take = Math.Min(512, Math.Min(na.Length, nb.Length));
+        return string.Equals(na[..take], nb[..take], StringComparison.Ordinal);
+    }
+
+    private static string NormalizeBody(string value) =>
+        Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+
+    private static bool LooksLikeHtmlDocument(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        var sample = body.AsSpan(0, Math.Min(body.Length, 2048));
+        return sample.Contains("<html", StringComparison.OrdinalIgnoreCase)
+               || sample.Contains("<!doctype html", StringComparison.OrdinalIgnoreCase)
+               || sample.Contains("<head", StringComparison.OrdinalIgnoreCase)
+               || sample.Contains("<body", StringComparison.OrdinalIgnoreCase)
+               || sample.Contains("<div id=\"root\"", StringComparison.OrdinalIgnoreCase)
+               || sample.Contains("<div id=\"app\"", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHtmlContentType(string? contentType) =>
+        !string.IsNullOrWhiteSpace(contentType)
+        && (contentType.Contains("text/html", StringComparison.OrdinalIgnoreCase)
+            || contentType.Contains("application/xhtml", StringComparison.OrdinalIgnoreCase));
+
+    private static bool PathExpectsHtml(string path) =>
+        path.Equals("phpinfo.php", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("server-status", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksLikeSensitiveContent(string path, UrlProbe probe)
+    {
+        var body = probe.BodySample ?? string.Empty;
+        var lower = body.ToLowerInvariant();
+
+        return path.ToLowerInvariant() switch
+        {
+            ".env" => Regex.IsMatch(body, @"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=", RegexOptions.Multiline)
+                      || lower.Contains("app_key=")
+                      || lower.Contains("db_password=")
+                      || lower.Contains("aws_secret"),
+            ".git/config" => lower.Contains("[core]") || lower.Contains("[remote") || lower.Contains("repositoryformatversion"),
+            ".git/head" => lower.Contains("ref:") || Regex.IsMatch(body, @"^[0-9a-f]{40}\s*$", RegexOptions.IgnoreCase | RegexOptions.Multiline),
+            "web.config" => lower.Contains("<configuration") || lower.Contains("<?xml"),
+            "appsettings.json" => body.TrimStart().StartsWith('{')
+                                  && (lower.Contains("\"connectionstrings\"")
+                                      || lower.Contains("\"logging\"")
+                                      || lower.Contains("\"allowedhosts\"")
+                                      || lower.Contains("\"appsettings\"")),
+            "backup.sql" or "dump.sql" => lower.Contains("create table")
+                                          || lower.Contains("insert into")
+                                          || lower.Contains("drop table")
+                                          || lower.Contains("-- mysql")
+                                          || lower.Contains("postgresql"),
+            "config.php" => lower.Contains("<?php") || lower.Contains("<?="),
+            "phpinfo.php" => lower.Contains("php version") || lower.Contains("phpinfo()") || lower.Contains("<title>phpinfo"),
+            ".ds_store" => probe.BodyLength >= 4 && !LooksLikeHtmlDocument(body),
+            "id_rsa" => lower.Contains("begin") && lower.Contains("private key"),
+            "server-status" => lower.Contains("apache") || lower.Contains("server status") || lower.Contains("current time"),
+            "actuator/env" => lower.Contains("propertysources")
+                              || lower.Contains("activeprofiles")
+                              || (body.TrimStart().StartsWith('{') && lower.Contains("\"property\"")),
+            "api/swagger.json" => lower.Contains("\"swagger\"")
+                                  || lower.Contains("\"openapi\"")
+                                  || lower.Contains("\"paths\""),
+            _ => !LooksLikeHtmlDocument(body) && probe.BodyLength > 0
+        };
     }
 
     private static IEnumerable<ScanFindingDto> EvaluateVulnerabilityPlaceholder(

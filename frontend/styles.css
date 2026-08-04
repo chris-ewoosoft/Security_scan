@@ -1185,7 +1185,7 @@ body.page-config .topbar {
 .findings-table-wrap {
   width: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow: visible;
   border: 1px solid var(--line);
   background: rgba(7, 16, 24, 0.35);
 }
@@ -1194,7 +1194,8 @@ body.page-config .topbar {
   width: 100%;
   max-width: 100%;
   table-layout: fixed;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .findings-table th,
@@ -1209,12 +1210,16 @@ body.page-config .topbar {
 }
 
 .findings-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
   font-size: 0.78rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
-  background: rgba(0, 0, 0, 0.22);
+  background: #0b1620;
   white-space: nowrap;
+  box-shadow: 0 1px 0 var(--line);
 }
 
 .findings-table tbody tr:last-child td {
