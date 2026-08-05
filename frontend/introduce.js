@@ -11,12 +11,6 @@ window.SecurityPortalIntroduce = (() => {
   function renderVi() {
     return `
 <div class="introduce-body">
-  <section class="introduce-hero">
-    <p class="eyebrow">${escapeHtml(t("introduce.eyebrow"))}</p>
-    <h2 class="page-title">${escapeHtml(t("introduce.title"))}</h2>
-    <p class="lede introduce-lede">${escapeHtml(t("introduce.subtitle"))}</p>
-  </section>
-
   <section class="introduce-section">
     <h3>${escapeHtml(t("introduce.s1.title"))}</h3>
     <p>${escapeHtml(t("introduce.s1.body"))}</p>
@@ -35,7 +29,8 @@ window.SecurityPortalIntroduce = (() => {
           <li><strong>Cookie Security</strong> — Cờ <code>Secure</code>, <code>HttpOnly</code>, <code>SameSite</code></li>
           <li><strong>CORS Policy</strong> — Cấu hình <code>Access-Control-Allow-Origin</code></li>
           <li><strong>Information Disclosure</strong> — Header nhạy cảm và dấu hiệu lộ thông tin</li>
-          <li><strong>Authenticated Scan</strong> — Quét khu vực sau đăng nhập</li>
+          <li><strong>Authenticated Scan</strong> — Quét khu vực sau đăng nhập (form / Basic / GraphQL)</li>
+          <li><strong>Source Route Inventory</strong> — Clone Git, inventory route/API, gợi ý thiếu tenant guard</li>
         </ul>
       </div>
       <div class="introduce-check-group">
@@ -97,30 +92,40 @@ window.SecurityPortalIntroduce = (() => {
       <li>
         <span class="introduce-step-num">3</span>
         <div>
-          <strong>Scan có đăng nhập (tuỳ chọn)</strong> — Bật <em>"Scan với đăng nhập"</em>, chọn loại
-          xác thực (Form / HTTP Basic / GraphQL) và điền thông tin. Hệ thống đăng nhập tự động rồi
-          quét khu vực sau login.
+          <strong>Scan có đăng nhập (tuỳ chọn)</strong> — Bật <em>Scan với đăng nhập</em>, chọn
+          Form / HTTP Basic / GraphQL. Với GraphQL, dán endpoint API (<code>…/graphql</code>).
+          Có thể điền Clinic ID cho hệ multi-tenant. Sau login, portal so sánh path ẩn danh vs đã đăng nhập
+          và probe API/GraphQL phát hiện được.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">4</span>
         <div>
-          <strong>Bắt đầu scan</strong> — Nhấn nút <em>Bắt đầu scan</em>. Tiến trình hiển thị
-          thời gian thực ở cột phải; nhấn <em>Dừng scan</em> để hủy giữa chừng.
+          <strong>Phân tích source code (tuỳ chọn)</strong> — Bật <em>Phân tích source code (Git)</em>,
+          nhập URL repo <code>https://…</code>, branch và PAT (repo private). PAT chỉ điền vào ô Token —
+          không dán vào ô URL. Portal shallow-clone repo, liệt kê route và gợi ý route có object id
+          thiếu guard org/clinic.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">5</span>
         <div>
-          <strong>Đọc Security Report</strong> — Sau khi hoàn tất, báo cáo xuất hiện ngay với
-          điểm rủi ro, executive summary và bảng findings. Nhấn <em>Export Report</em> để xuất PDF.
+          <strong>Bắt đầu scan</strong> — Nhấn <em>Bắt đầu scan</em>. Trạng thái cập nhật tự động ở cột phải;
+          nhấn <em>Dừng scan</em> để hủy.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">6</span>
         <div>
-          <strong>Xem lịch sử</strong> — Mở <em>Chức năng → Lịch sử</em> để xem lại các lượt quét
-          trước hoặc xóa nhiều bản ghi cùng lúc.
+          <strong>Đọc Security Report</strong> — Điểm rủi ro, executive summary, bảng findings
+          (kể cả <code>auth.*</code> và <code>source.*</code>). <em>Export Report</em> để xuất PDF.
+        </div>
+      </li>
+      <li>
+        <span class="introduce-step-num">7</span>
+        <div>
+          <strong>Xem lịch sử &amp; hướng dẫn</strong> — <em>Chức năng → Lịch sử</em> để mở lại scan cũ;
+          <em>Chức năng → Giới thiệu</em> để xem hướng dẫn này.
         </div>
       </li>
     </ol>
@@ -144,7 +149,7 @@ window.SecurityPortalIntroduce = (() => {
       <li>Mật khẩu băm bằng <strong>BCrypt</strong> — không lưu plaintext.</li>
       <li>JWT Bearer + Refresh Token quản lý server-side, có thể thu hồi bất cứ lúc nào.</li>
       <li>Mọi thao tác quan trọng ghi <strong>Audit Log</strong> kèm IP, UserAgent và dữ liệu thay đổi.</li>
-      <li>Thông tin xác thực scan (password, clinic ID) <strong>không bao giờ</strong> trả về plaintext qua API.</li>
+      <li>Thông tin xác thực scan (password, clinic ID) và <strong>PAT Git</strong> được mã hóa — API không trả plaintext; lỗi scan được sanitize để không lộ token.</li>
       <li>Giao tiếp Frontend ↔ API qua Nginx reverse proxy (HTTPS).</li>
     </ul>
   </section>
@@ -154,12 +159,6 @@ window.SecurityPortalIntroduce = (() => {
   function renderEn() {
     return `
 <div class="introduce-body">
-  <section class="introduce-hero">
-    <p class="eyebrow">${escapeHtml(t("introduce.eyebrow"))}</p>
-    <h2 class="page-title">${escapeHtml(t("introduce.title"))}</h2>
-    <p class="lede introduce-lede">${escapeHtml(t("introduce.subtitle"))}</p>
-  </section>
-
   <section class="introduce-section">
     <h3>${escapeHtml(t("introduce.s1.title"))}</h3>
     <p>${escapeHtml(t("introduce.s1.body"))}</p>
@@ -178,7 +177,8 @@ window.SecurityPortalIntroduce = (() => {
           <li><strong>Cookie Security</strong> — <code>Secure</code>, <code>HttpOnly</code>, <code>SameSite</code> flags</li>
           <li><strong>CORS Policy</strong> — <code>Access-Control-Allow-Origin</code> configuration</li>
           <li><strong>Information Disclosure</strong> — Sensitive headers and data leakage signals</li>
-          <li><strong>Authenticated Scan</strong> — Scan behind login</li>
+          <li><strong>Authenticated Scan</strong> — Scan behind login (form / Basic / GraphQL)</li>
+          <li><strong>Source Route Inventory</strong> — Git clone, route/API inventory, tenant-guard hints</li>
         </ul>
       </div>
       <div class="introduce-check-group">
@@ -240,30 +240,40 @@ window.SecurityPortalIntroduce = (() => {
       <li>
         <span class="introduce-step-num">3</span>
         <div>
-          <strong>Authenticated scan (optional)</strong> — Enable <em>"Scan with login"</em>, choose
-          auth type (Form / HTTP Basic / GraphQL) and fill in credentials. The system logs in
-          automatically before scanning.
+          <strong>Authenticated scan (optional)</strong> — Enable <em>Scan with login</em>, choose
+          Form / HTTP Basic / GraphQL. For GraphQL, paste the API endpoint (<code>…/graphql</code>).
+          Clinic ID is available for multi-tenant apps. After login, the portal compares anonymous vs
+          authenticated paths and probes discovered API/GraphQL bases.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">4</span>
         <div>
-          <strong>Start scan</strong> — Click <em>Start scan</em>. Real-time progress appears in
-          the right column; click <em>Stop scan</em> to cancel.
+          <strong>Source analysis (optional)</strong> — Enable <em>Analyze source code (Git)</em>,
+          enter an <code>https://</code> repo URL, branch and PAT (private repos). Put the PAT only in
+          the Token field — never in the URL box. The portal shallow-clones the repo, inventories routes
+          and flags object-id routes that may lack tenant/org guards.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">5</span>
         <div>
-          <strong>Read the Security Report</strong> — The report appears immediately on completion with
-          risk score, executive summary and findings table. Click <em>Export Report</em> for PDF.
+          <strong>Start scan</strong> — Click <em>Start scan</em>. Status updates automatically in the
+          right column; click <em>Stop scan</em> to cancel.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">6</span>
         <div>
-          <strong>View history</strong> — Open <em>Functions → History</em> to review previous scans
-          or bulk-delete records.
+          <strong>Read the Security Report</strong> — Risk score, executive summary and findings
+          (including <code>auth.*</code> and <code>source.*</code>). Use <em>Export Report</em> for PDF.
+        </div>
+      </li>
+      <li>
+        <span class="introduce-step-num">7</span>
+        <div>
+          <strong>History &amp; guide</strong> — <em>Functions → History</em> to reopen past scans;
+          <em>Functions → Introduce</em> for this guide.
         </div>
       </li>
     </ol>
@@ -287,7 +297,7 @@ window.SecurityPortalIntroduce = (() => {
       <li>Passwords hashed with <strong>BCrypt</strong> — never stored in plaintext.</li>
       <li>JWT Bearer + server-managed Refresh Tokens, revocable at any time.</li>
       <li>All important actions logged in <strong>Audit Log</strong> with IP, UserAgent and diff.</li>
-      <li>Scan credentials (password, clinic ID) are <strong>never</strong> returned as plaintext by the API.</li>
+      <li>Scan credentials (password, clinic ID) and <strong>Git PATs</strong> are encrypted — the API never returns plaintext; scan errors are sanitized to avoid token leakage.</li>
       <li>Frontend ↔ API communication via Nginx reverse proxy (HTTPS).</li>
     </ul>
   </section>
@@ -303,6 +313,7 @@ window.SecurityPortalIntroduce = (() => {
           <div>
             <p class="eyebrow" data-i18n="introduce.eyebrow"></p>
             <h2 class="page-title" data-i18n="introduce.title"></h2>
+            <p class="lede introduce-lede" data-i18n="introduce.subtitle"></p>
           </div>
           <button type="button" class="ghost-btn" data-action="close-introduce"
             data-i18n="introduce.close"></button>

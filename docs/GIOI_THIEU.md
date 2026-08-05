@@ -1,238 +1,222 @@
-# Security Portal — Tài liệu giới thiệu phần mềm
+# Security Portal — Hướng dẫn sử dụng
 
 ## 1. Tổng quan
 
-**Security Portal** là nền tảng quét bảo mật website tự động, được thiết kế cho các đội ngũ kỹ thuật và kỹ sư bảo mật. Hệ thống cho phép người dùng phân tích rủi ro bảo mật của một website (hoặc ứng dụng web) theo chuẩn OWASP và các tiêu chuẩn bảo mật thực tế, từ đó nhận báo cáo chi tiết về lỗ hổng, cấu hình sai và khuyến nghị khắc phục.
+**Security Portal** là nền tảng quét bảo mật website tự động cho đội ngũ kỹ thuật và kỹ sư bảo mật. Hệ thống phân tích rủi ro theo baseline OWASP, tạo **Technical Report** với findings, bằng chứng và khuyến nghị khắc phục.
 
-Phần mềm được xây dựng theo kiến trúc microservice, triển khai bằng Docker Compose, giao diện người dùng hoàn toàn bằng tiếng Việt và tiếng Anh (chuyển ngôn ngữ tức thì).
+Giao diện hỗ trợ **tiếng Việt / tiếng Anh** (chuyển ngôn ngữ tức thì ở góc header).
+
+**Bố cục trang chủ**
+
+| Cột trái | Cột phải |
+|---|---|
+| Nhập URL, đăng nhập scan, phân tích source | Technical Report, Cấu hình, Lịch sử hoặc Hướng dẫn |
+
+**Menu header:** `Trang chủ` · `Chức năng ▾` (Cấu hình · Lịch sử · Giới thiệu)
 
 ---
 
 ## 2. Tính năng chính
 
-### 2.1 Quét bảo mật website
+### 2.1 Quét bảo mật website (HTTP)
 
-| Nhóm kiểm tra | Tên check | Mô tả |
+| Nhóm | Check | Mô tả |
 |---|---|---|
-| **Cơ bản (Built-in)** | Khả năng truy cập | HTTP response, thời gian phản hồi, mã trạng thái |
-| | HTTPS / TLS | Xác minh site dùng HTTPS và cấu hình TLS cơ bản |
-| | Security Headers | Phân tích CSP, HSTS, X-Frame-Options và các header bảo mật khác |
-| | Server Fingerprint | Thu thập thông tin lộ qua `Server` / `X-Powered-By` |
-| | Cookie Security | Kiểm tra cờ `Secure`, `HttpOnly`, `SameSite` |
-| | CORS Policy | Đánh giá `Access-Control-Allow-Origin` và cấu hình CORS |
-| | Information Disclosure | Phát hiện header nhạy cảm và dấu hiệu lộ thông tin |
-| | Authenticated Scan | Quét khu vực sau đăng nhập (form/HTTP Basic/GraphQL) |
-| **Mạng & Hạ tầng** | Port Scan | Quét cổng mở bằng Naabu |
-| | DNS Security | Kiểm tra bản ghi DNS (A/AAAA/CNAME) bằng dnsx |
-| | WAF Detection | Phát hiện Web Application Firewall bằng wafw00f |
-| **Khám phá & Tình báo** | Directory Discovery | Tìm đường dẫn / thư mục ẩn (Feroxbuster, FFUF) |
-| | Sensitive File Scan | Tìm file nhạy cảm (`.env`, backup, git, config) bằng Nuclei |
-| | Technology Detection | Nhận diện CMS/framework/JS stack (WhatWeb, Wappalyzer) |
-| | Screenshot | Chụp ảnh trang đích lưu chứng cứ (Gowitness + MinIO) |
-| **Lỗ hổng** | Vulnerability Scan | Quét theo template CVE, misconfiguration bằng Nuclei |
+| **Cơ bản** | Khả năng truy cập | HTTP status, thời gian phản hồi |
+| | HTTPS / TLS | Xác minh HTTPS và tín hiệu TLS |
+| | Security Headers | CSP, HSTS, X-Frame-Options, … |
+| | Server Fingerprint | `Server` / `X-Powered-By` |
+| | Cookie Security | `Secure`, `HttpOnly`, `SameSite` |
+| | CORS Policy | `Access-Control-Allow-Origin` |
+| | Information Disclosure | Header nhạy cảm |
+| | **Authenticated Scan** | Đăng nhập rồi quét khu vực sau login |
+| **Source-assisted** | **Source Route Inventory** | Shallow clone Git, trích route/API từ source, gợi ý thiếu tenant guard |
+| **Mạng** | Port Scan | Probe TCP cổng phổ biến (Naabu: worker ngoài) |
+| | DNS Security | Resolve DNS |
+| | WAF Detection | Fingerprint WAF qua header |
+| **Khám phá** | Directory Discovery | Wordlist path nhạy cảm |
+| | Sensitive File Scan | `.env`, `.git`, backup, … |
+| | Technology Detection | Suy luận stack từ header |
+| | Screenshot | Placeholder — cần worker Gowitness |
+| **Lỗ hổng** | Vulnerability Scan | Placeholder — cần worker Nuclei |
 
-### 2.2 Báo cáo bảo mật
+> Các check **Built-in** chạy trực tiếp trong API. Một số module ghi chú tool ngoài (Naabu, Nuclei, …) đang ở dạng catalog / placeholder cho worker tương lai.
 
-Sau mỗi lượt quét, hệ thống tạo **Security Report** gồm:
+### 2.2 Scan có đăng nhập (Authenticated Scan)
 
-- **Điểm rủi ro (Risk Score)**: 0–100, tính theo trọng số finding (High +25, Medium +12, Low +5, Info +0). Điểm 0 là an toàn nhất.
-- **Risk Level**: `Low` (< 40) · `Medium` (40–69) · `High` (≥ 70)
-- **Danh sách Findings**: mỗi finding gồm mức độ nghiêm trọng, tiêu đề, chi tiết kỹ thuật, bằng chứng, khuyến nghị và các bước tái hiện lỗi.
-- **Executive Summary**: tóm tắt rủi ro tổng quan dành cho quản lý.
-
-Ba loại báo cáo có thể chọn:
-
-| Loại | Dành cho |
-|---|---|
-| **Technical Report** | Kỹ sư bảo mật — chi tiết kỹ thuật theo từng check và bằng chứng |
-| **Executive Summary** | Quản lý — rủi ro tổng quan và khuyến nghị ưu tiên |
-| **OWASP-oriented Summary** | Nhóm findings theo góc nhìn OWASP / baseline web |
-
-### 2.3 Theo dõi tiến trình thời gian thực
-
-Giao diện hiển thị trạng thái scan (`Queued → Running → Completed / Cancelled / Failed`) qua kết nối SignalR, không cần tải lại trang.
-
-### 2.4 Lịch sử quét
-
-Lưu lại toàn bộ lượt quét trước, cho phép xem lại báo cáo và xóa nhiều bản ghi cùng lúc.
-
-### 2.5 Quản lý người dùng và tổ chức
-
-- Hệ thống phân cấp: **Organization → User → Role → Permission**
-- Ba vai trò mặc định: `Admin`, `SecurityEngineer`, `Viewer`
-- Phân quyền chi tiết theo resource: `projects`, `assets`, `scans`, `findings`, `reports`, `users`, `audit`
-- Xác thực JWT + Refresh Token; hỗ trợ đổi mật khẩu và cập nhật hồ sơ cá nhân
-
-### 2.6 Kiểm toán (Audit Log)
-
-Mọi thao tác quan trọng (tạo scan, thay đổi quyền, xóa dữ liệu) đều được ghi nhật ký đầy đủ: người dùng, hành động, địa chỉ IP, giá trị trước/sau thay đổi.
-
----
-
-## 3. Kiến trúc hệ thống
-
-```
-┌─────────────────────────────────────────────────────┐
-│                     Frontend (SPA)                  │
-│   index.html · configure · history · report (JS)    │
-└──────────────────────┬──────────────────────────────┘
-                       │ HTTP REST + SignalR
-┌──────────────────────▼──────────────────────────────┐
-│              SecurityPortal.API  (.NET 8)            │
-│   Controllers v1 · SignalR Hub · JWT Auth · Swagger  │
-└──────┬───────────────┬───────────────────────────────┘
-       │               │ MassTransit / RabbitMQ
-       │    ┌──────────▼──────────────────────────────┐
-       │    │         Workers (microservices)          │
-       │    │  Discovery · Fingerprint · Network       │
-       │    │  Screenshot · SSL · Web                  │
-       │    └──────────────────────────────────────────┘
-       │
-┌──────▼──────────────────────┐   ┌──────────────────┐
-│   PostgreSQL (dữ liệu)      │   │   Redis (cache)  │
-└─────────────────────────────┘   └──────────────────┘
-┌─────────────────────────────┐   ┌──────────────────┐
-│   Prometheus (metrics)      │──▶│  Grafana (charts)│
-└─────────────────────────────┘   └──────────────────┘
-┌─────────────────────────────┐
-│   Loki + Serilog (logs)     │
-└─────────────────────────────┘
-```
-
-**Công nghệ sử dụng:**
-
-| Thành phần | Công nghệ |
-|---|---|
-| Backend API | .NET 8, Clean Architecture, CQRS, MediatR |
-| Cơ sở dữ liệu | PostgreSQL (EF Core + Npgsql 8.x) |
-| Cache | Redis (StackExchange.Redis 2.x) |
-| Message queue | RabbitMQ (MassTransit 8.x) |
-| Frontend | JavaScript thuần (SPA), font Bricolage Grotesque + Manrope |
-| Xác thực | JWT Bearer + Refresh Token (BCrypt) |
-| Realtime | SignalR |
-| Báo cáo PDF | DinkToPdf |
-| Logging | Serilog → Loki |
-| Metrics | Prometheus + Grafana |
-| Container | Docker Compose + Nginx reverse proxy |
-
----
-
-## 4. Hướng dẫn sử dụng
-
-### 4.1 Vai trò người dùng
-
-| Vai trò | Mô tả |
-|---|---|
-| **Admin** | Quản trị toàn bộ hệ thống: người dùng, tổ chức, phân quyền, xem audit log |
-| **SecurityEngineer** | Tạo và chạy quét, xem và xuất báo cáo, quản lý findings |
-| **Viewer** | Chỉ đọc: xem kết quả scan và báo cáo, không thể tạo scan mới |
-
-### 4.2 Luồng sử dụng cơ bản
-
-#### Bước 1 — Đăng ký / Đăng nhập
-
-1. Truy cập Security Portal qua trình duyệt.
-2. Đăng ký tài khoản mới: điền email, tên đăng nhập, mật khẩu và tên tổ chức.
-3. Đăng nhập nhận JWT token; token được làm mới tự động khi hết hạn.
-
-#### Bước 2 — Cấu hình scan (tùy chọn)
-
-1. Mở menu **Chức năng → Cấu hình**.
-2. Tích chọn các **Security Checks** muốn thực hiện.
-3. Chọn **Tools** bên ngoài sẽ được sử dụng (Naabu, Nuclei, Feroxbuster, v.v.).
-4. Chọn loại **Báo cáo** (Technical / Executive / OWASP).
-5. Cấu hình được lưu tự động và áp dụng cho mọi lần quét tiếp theo.
-
-#### Bước 3 — Quét bảo mật
-
-1. Ở trang chủ, nhập địa chỉ website cần quét (ví dụ: `https://example.com`).
-2. Bật **"Scan với đăng nhập"** nếu cần quét khu vực sau đăng nhập — điền `Login URL`, `Username`, `Password` và loại xác thực (Form / HTTP Basic / GraphQL).
-3. Nhấn **Bắt đầu scan**.
-4. Theo dõi tiến trình thời gian thực trực tiếp trên giao diện.
-5. Nhấn **Dừng scan** nếu muốn hủy giữa chừng.
-
-#### Bước 4 — Đọc Security Report
-
-Báo cáo hiển thị ngay sau khi scan hoàn tất, gồm:
-
-- **Chỉ số tổng quan**: HTTP status, thời gian phản hồi, HTTPS, Server header.
-- **Điểm rủi ro**: thanh màu từ xanh (an toàn) đến đỏ (rủi ro cao).
-- **Executive Summary**: tóm tắt bằng ngôn ngữ tự nhiên.
-- **Bảng Findings**: mỗi dòng là một lỗ hổng/cấu hình sai với mức độ, công cụ phát hiện, khuyến nghị và các bước tái hiện.
-- Nút **Export Report** để xuất PDF.
-
-#### Bước 5 — Xem lại lịch sử
-
-1. Mở **Chức năng → Lịch sử**.
-2. Danh sách các lượt quét hiển thị theo thứ tự thời gian.
-3. Nhấn vào một lượt quét để xem lại báo cáo đầy đủ.
-4. Tích chọn nhiều bản ghi rồi **Xóa** để dọn dẹp lịch sử.
-
-### 4.3 Tính năng quét có xác thực (Authenticated Scan)
-
-Security Portal hỗ trợ quét vào vùng sau đăng nhập với 3 loại:
+Bật **Scan với đăng nhập** trên form trang chủ:
 
 | Loại | Khi nào dùng |
 |---|---|
-| **Form login** | Website có form username/password thông thường |
-| **HTTP Basic** | API hoặc trang bảo vệ bằng HTTP Basic Authentication |
-| **GraphQL API** | Ứng dụng dùng GraphQL — trỏ tới endpoint `/graphql` |
+| **Form login** | Website có form username/password |
+| **HTTP Basic** | Trang/API bảo vệ Basic Auth |
+| **GraphQL API** | SPA/backend GraphQL — dán endpoint `/graphql`, không phải trang `/login` |
 
-> Trường **Clinic / Hospital ID** khả dụng cho hệ thống y tế yêu cầu thêm định danh cơ sở.
+**Trường bổ sung**
+
+- **Clinic / Hospital ID** — multi-tenant (ví dụ hệ thống y tế Clever)
+- **Login URL** — tuỳ chọn; bắt buộc với GraphQL
+- **URL sau đăng nhập chứa** — marker xác nhận login thành công
+
+**Sau khi login thành công**, portal bổ sung findings:
+
+- Cookie session (`Secure` / `HttpOnly`)
+- API/GraphQL base phát hiện sau login
+- So sánh path **ẩn danh vs đã đăng nhập** (`auth.surface.authz_diff`)
+- Probe GraphQL anonymous vs authenticated
+
+### 2.3 Phân tích source code (Source Route Inventory)
+
+Bật **Phân tích source code (Git)** trên form trang chủ:
+
+| Ô | Mô tả |
+|---|---|
+| **Git repository URL** | URL `https://` tới repo (không dùng `git@` SSH) |
+| **Branch** | Tuỳ chọn, mặc định branch mặc định của repo |
+| **Token / PAT** | Tuỳ chọn cho repo private — quyền **read** repository |
+
+**Quy trình**
+
+1. Shallow clone qua **LibGit2Sharp** (không cần cài `git` trong container)
+2. Quét file source: ASP.NET, Next.js, OpenAPI, Express, GraphQL schema
+3. Sinh findings: `source.routes.found`, `source.authz.candidate`, …
+4. Bổ sung path từ source vào probe authenticated (ví dụ `/event`, `/event/export`)
+5. (Tuỳ chọn) Lưu `routes.json` lên MinIO
+
+**Lấy PAT (GitHub)**
+
+1. GitHub → Settings → Developer settings → Personal access tokens
+2. Tạo token **read-only** (`Contents: Read` hoặc fine-grained tương đương)
+3. Dán vào ô **Token / PAT** — **không** dán token vào ô Repository URL
+4. Repo public có thể bỏ trống token
+
+**Giới hạn:** worktree phân tích tối đa ~512 MB (không tính `.git`, `node_modules`, `bin/obj`). Clone timeout ~90 giây.
+
+### 2.4 Báo cáo bảo mật
+
+| Thành phần | Mô tả |
+|---|---|
+| **Risk Score** | 0–100 (High +25, Medium +12, Low +5) |
+| **Risk Level** | Low &lt; 40 · Medium 40–69 · High ≥ 70 |
+| **Findings** | Mức độ, tiêu đề, chi tiết, evidence, khuyến nghị, bước tái hiện |
+| **Executive Summary** | Tóm tắt rủi ro |
+
+| Loại báo cáo | Đối tượng |
+|---|---|
+| Technical Report | Kỹ sư bảo mật |
+| Executive Summary | Quản lý |
+| OWASP-oriented Summary | Nhóm theo baseline OWASP |
+
+Nút **Export Report** xuất PDF/HTML từ báo cáo hiện tại.
+
+### 2.5 Theo dõi tiến trình
+
+Giao diện **poll** `GET /api/v1/scans/{id}` mỗi vài giây để cập nhật trạng thái: `Queued` → `Running` → `Completed` / `Failed` / `Cancelled`. Có thể **Dừng scan** khi đang chạy.
+
+### 2.6 Lịch sử quét
+
+**Chức năng → Lịch sử:** xem lại báo cáo, chọn nhiều bản ghi để xóa.
 
 ---
 
-## 5. Bảo mật và quyền riêng tư
+## 3. Hướng dẫn từng bước
 
-- Mật khẩu người dùng được băm bằng **BCrypt** — không lưu plaintext.
-- JWT token có thời hạn ngắn; Refresh Token được quản lý server-side và có thể thu hồi.
-- Mọi thao tác quan trọng được ghi **Audit Log** kèm IP, UserAgent và dữ liệu thay đổi.
-- Thông tin xác thực scan (password, clinic ID) chỉ lưu trong cấu hình scan; API trả về dữ liệu đã che (`UsernameMasked`, `ClinicIdMasked`) — không bao giờ trả về plaintext.
-- Giao tiếp giữa frontend và API qua Nginx reverse proxy (HTTPS).
+### Bước 1 — Mở trang chủ
+
+Truy cập Security Portal qua trình duyệt (thường qua Nginx reverse proxy).
+
+### Bước 2 — Cấu hình scan (tuỳ chọn)
+
+1. **Chức năng → Cấu hình**
+2. Tích **Security Checks** và **Tools**
+3. Chọn loại **Báo cáo**
+4. Cấu hình lưu trong `localStorage` trình duyệt
+
+### Bước 3 — Nhập mục tiêu
+
+1. **Website URL** — ví dụ `https://example.com` hoặc IP nội bộ `http://172.76.10.211`
+2. (Tuỳ chọn) **Scan với đăng nhập** — điền credential và loại auth
+3. (Tuỳ chọn) **Phân tích source code** — repo Git + PAT nếu private
+
+### Bước 4 — Bắt đầu scan
+
+Nhấn **Bắt đầu scan**. Báo cáo hiển thị ở cột phải khi hoàn tất.
+
+### Bước 5 — Đọc findings
+
+- Chú ý findings **auth.*** khi bật đăng nhập
+- Chú ý findings **source.*** khi bật phân tích source
+- Finding `source.authz.candidate` = nghi ngờ route có `:id` thiếu guard org/clinic — cần xác minh thêm bằng test runtime (dual-account)
+
+### Bước 6 — Lịch sử & xuất báo cáo
+
+- **Chức năng → Lịch sử** — mở lại scan cũ
+- **Export Report** — tải báo cáo
+
+### Bước 7 — Hướng dẫn trong app
+
+**Chức năng → Giới thiệu** — bản hướng dẫn tóm tắt (cùng nội dung panel phải).
+
+---
+
+## 4. Bảo mật và quyền riêng tư
+
+| Nội dung | Cách xử lý |
+|---|---|
+| Password scan | AES-GCM mã hóa trước khi lưu DB; API chỉ trả `UsernameMasked` |
+| PAT / Git token | Mã hóa tương tự password; không xuất hiện trong findings (đã sanitize) |
+| Log request | `LoggingBehavior` redact field password/token |
+| PAT lộ | Revoke ngay trên Git forge và tạo token mới |
+
+**Không** dán PAT vào ô Repository URL. **Không** commit token vào Git.
+
+---
+
+## 5. Kiến trúc (tóm tắt)
+
+```
+Frontend (SPA) ──HTTP──▶ SecurityPortal.API (.NET 10)
+                              │
+                    WebsiteScanProcessor (poller)
+                              │
+                    PostgreSQL (scans, findings JSON)
+                    MinIO (route inventory artifacts)
+                    Redis · RabbitMQ · Workers (skeleton)
+```
+
+| Thành phần | Ghi chú |
+|---|---|
+| API | Xử lý scan website, auth login, source inventory |
+| Workers | Docker services có sẵn; chưa wire đầy đủ cho WebsiteScan |
+| PostgreSQL | `website_scans`, config/findings JSON |
+| MinIO | Artifact `routes.json` khi source scan thành công |
+| Nginx | Phục vụ frontend + reverse proxy API |
 
 ---
 
 ## 6. Triển khai
 
-Hệ thống triển khai hoàn toàn bằng **Docker Compose**:
-
 ```bash
-# Khởi động toàn bộ stack
 docker compose up -d
-
-# Xem log
-docker compose logs -f
+docker compose build api    # sau khi đổi code API
+docker compose up -d api
 ```
 
-Các service chạy trong Docker:
+Swagger: `http://localhost:<port>/swagger`
 
-| Service | Vai trò |
+---
+
+## 7. Hạn chế hiện tại & lộ trình
+
+| Tính năng | Trạng thái |
 |---|---|
-| `nginx` | Reverse proxy, phục vụ frontend |
-| `api` | SecurityPortal.API (.NET 8) |
-| `postgres` | Cơ sở dữ liệu chính |
-| `redis` | Cache |
-| `rabbitmq` | Message queue |
-| `prometheus` | Thu thập metrics |
-| `grafana` | Dashboard giám sát |
-| Workers | Các worker quét chạy song song |
+| HTTP baseline + auth surface | ✅ Hoạt động |
+| Source route inventory | ✅ Hoạt động (LibGit2Sharp) |
+| Cross-org BOLA runtime (2 account) | 🔜 Chưa có |
+| Nuclei / Gowitness workers | 🔜 Placeholder |
+| SignalR progress realtime | 🔜 UI dùng HTTP poll |
+| Đăng ký / JWT đầy đủ | 🔜 Một số endpoint scan cho phép anonymous |
 
 ---
 
-## 7. API Reference
-
-Tài liệu API tự động được tạo bằng Swagger/OpenAPI, truy cập tại:
-
-```
-http://localhost:<port>/swagger
-```
-
-API hỗ trợ versioning theo URL (`/api/v1/...`). Xác thực bằng JWT Bearer token — thêm header:
-
-```
-Authorization: Bearer <token>
-```
-
----
-
-*Tài liệu này mô tả phiên bản Security Portal hiện tại. Một số tính năng (AI Service, Project Management, Asset Management) đang trong quá trình phát triển.*
+*Tài liệu cập nhật theo phiên bản hiện tại của Security Portal (authenticated scan, source inventory, menu Chức năng).*
