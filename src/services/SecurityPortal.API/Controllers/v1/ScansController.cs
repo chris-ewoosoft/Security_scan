@@ -35,7 +35,8 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
             request.Tools,
             request.ReportType,
             userId,
-            Auth: request.Auth));
+            Auth: request.Auth,
+            Source: request.Source));
         return CreatedAtAction(nameof(GetById), new { id = result.Id, version = "1.0" }, result);
     }
 

@@ -57,6 +57,22 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
                 .When(x => x.Auth!.Type!.Equals("graphql", StringComparison.OrdinalIgnoreCase))
                 .WithMessage("GraphQL endpoint URL is required.");
         });
+
+        When(x => x.Source is not null && !string.IsNullOrWhiteSpace(x.Source.RepositoryUrl), () =>
+        {
+            RuleFor(x => x.Source!.RepositoryUrl!)
+                .MaximumLength(2048)
+                .Must(BeValidWebsiteUrl)
+                .WithMessage("Enter a valid https Git repository URL.");
+
+            RuleFor(x => x.Source!.Branch!)
+                .MaximumLength(200)
+                .When(x => !string.IsNullOrWhiteSpace(x.Source!.Branch));
+
+            RuleFor(x => x.Source!.Token!)
+                .MaximumLength(2048)
+                .When(x => !string.IsNullOrWhiteSpace(x.Source!.Token));
+        });
     }
 
     private static bool BeValidWebsiteUrl(string? value)

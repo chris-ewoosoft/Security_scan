@@ -18,6 +18,9 @@ public static class ScanCatalog
             ["cookie-inspector"], false, "owasp", 3),
         new("authenticated-scan", "Authenticated Scan", "Đăng nhập form/basic rồi quét khu vực sau login.",
             ["http-probe"], false, "owasp", 4),
+        new("route-inventory", "Source Route Inventory",
+            "Clone Git (shallow) và trích xuất inventory route/API từ source để định hướng scan.",
+            ["source-analyzer"], false, "recon", 5),
         new("cors-policy", "CORS Policy", "Đánh giá Access-Control-Allow-Origin và cấu hình CORS lộ ra.",
             ["cors-checker"], false, "owasp", 3),
         new("information-disclosure", "Information Disclosure", "Phát hiện header nhạy cảm và dấu hiệu lộ thông tin.",
@@ -59,6 +62,8 @@ public static class ScanCatalog
         new("fingerprint", "Fingerprint", "Built-in", "Nhận diện stack từ response headers."),
         new("cookie-inspector", "Cookie Inspector", "Built-in", "Kiểm tra thuộc tính bảo mật của cookie."),
         new("cors-checker", "CORS Checker", "Built-in", "Kiểm tra chính sách CORS phản hồi."),
+        new("source-analyzer", "Source Analyzer", "Built-in",
+            "Shallow Git clone + heuristic route inventory (ASP.NET, Next.js, OpenAPI, Express)."),
 
         // External high-value
         new("naabu", "Naabu", "External", "Port scanner nhanh (ProjectDiscovery) — quét cổng mở trên host."),

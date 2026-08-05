@@ -1,0 +1,681 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using SecurityPortal.Application.Common.Interfaces;
+using SecurityPortal.Application.Features.Scans.DTOs;
+using SecurityPortal.Domain.Entities;
+
+namespace SecurityPortal.API.Services;
+
+/// <summary>
+/// Phase-1 source-assisted scan: shallow Git clone + heuristic route inventory.
+/// Hard limits keep work safe inside the API poller until a sandbox worker exists.
+/// </summary>
+public static partial class SourceRouteInventoryAnalyzer
+{
+    public const string CheckId = "route-inventory";
+    private static readonly ScanCheckDefinition CheckDef = new(
+        CheckId,
+        "Source Route Inventory",
+        "Clone Git and extract route/API inventory.",
+        ["source-analyzer"],
+        false,
+        "recon",
+        5);
+
+    private const int CloneTimeoutSeconds = 90;
+    /// <summary>Size of analyzable tree (excludes .git / node_modules / build outputs).</summary>
+    private const long MaxWorktreeBytes = 512L * 1024 * 1024;
+    private const int MaxFilesToScan = 4_000;
+    private const int MaxRoutesInFinding = 80;
+    private const int MaxAuthzCandidates = 25;
+
+    private static readonly string[] SkipDirNames =
+    [
+        ".git", "node_modules", "bin", "obj", "dist", "build", ".next", "coverage",
+        "vendor", "packages", ".turbo", ".cache", "TestResults", "__pycache__"
+    ];
+
+    private static readonly string[] CodeExtensions =
+    [
+        ".cs", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml", ".graphql", ".gql"
+    ];
+
+    public sealed record InventoryResult(
+        IReadOnlyList<ScanFindingDto> Findings,
+        IReadOnlyList<string> ProbePaths,
+        string? ArtifactJson);
+
+    public static async Task<InventoryResult> AnalyzeAsync(
+        Guid scanId,
+        ScanSourceConfiguration source,
+        IScanSecretProtector secretProtector,
+        IFileStorage? fileStorage,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        var tools = CheckDef.Tools;
+        var workRoot = Path.Combine(Path.GetTempPath(), "sp-source", scanId.ToString("N"));
+        Directory.CreateDirectory(workRoot);
+        var cloneDir = Path.Combine(workRoot, "repo");
+        string? token = null;
+
+        try
+        {
+            token = string.IsNullOrWhiteSpace(source.TokenCipher)
+                ? null
+                : secretProtector.Unprotect(source.TokenCipher);
+
+            var clone = await CloneAsync(source.RepositoryUrl!, source.Branch, token, cloneDir, cancellationToken);
+            if (!clone.Ok)
+            {
+                return new InventoryResult(
+                [
+                    Finding("High", "source.clone.failed",
+                        P(("observed", clone.Message),
+                            ("impact", "Source-assisted route inventory and authz hints were skipped."),
+                            ("repository", MaskRepo(source.RepositoryUrl))),
+                        clone.Message)
+                ], [], null);
+            }
+
+            var size = DirSize(cloneDir, excludeSkipDirs: true);
+            if (size > MaxWorktreeBytes)
+            {
+                return new InventoryResult(
+                [
+                    Finding("Medium", "source.clone.too_large",
+                        P(("observed", $"Analyzable source ~{size / (1024 * 1024)} MB exceeds limit {MaxWorktreeBytes / (1024 * 1024)} MB (`.git`/build folders excluded)."),
+                            ("impact", "Inventory skipped to protect scanner resources."),
+                            ("repository", MaskRepo(source.RepositoryUrl))),
+                        $"bytes={size}")
+                ], [], null);
+            }
+
+            var inventory = ExtractRoutes(cloneDir, cancellationToken);
+            var probePaths = inventory.Routes
+                .Select(NormalizeProbePath)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(120)
+                .ToList();
+
+            var findings = new List<ScanFindingDto>();
+            if (inventory.Routes.Count == 0)
+            {
+                findings.Add(Finding("Low", "source.routes.none",
+                    P(("observed", $"Cloned {MaskRepo(source.RepositoryUrl)} but no routes matched built-in heuristics."),
+                        ("impact", "HTTP scan was not enriched from source; add OpenAPI or supported frameworks."),
+                        ("repository", MaskRepo(source.RepositoryUrl)),
+                        ("commit", clone.Commit ?? "unknown")),
+                    $"filesScanned={inventory.FilesScanned}"));
+            }
+            else
+            {
+                var sample = string.Join("; ", inventory.Routes.Take(MaxRoutesInFinding).Select(r => $"{r.Method} {r.Path}"));
+                findings.Add(Finding("Info", "source.routes.found",
+                    P(("observed", $"Found {inventory.Routes.Count} route(s) from source ({inventory.FilesScanned} files). Sample: {sample}"),
+                        ("impact", "Discovered paths will enrich authenticated path probes when available."),
+                        ("repository", MaskRepo(source.RepositoryUrl)),
+                        ("commit", clone.Commit ?? "unknown"),
+                        ("routeCount", inventory.Routes.Count.ToString())),
+                    sample));
+            }
+
+            foreach (var candidate in inventory.AuthzCandidates.Take(MaxAuthzCandidates))
+            {
+                findings.Add(Finding("Medium", "source.authz.candidate",
+                    P(("observed", $"Possible object-id route without nearby tenant/org guard: {candidate.Method} {candidate.Path} ({candidate.File}:{candidate.Line})."),
+                        ("impact", "May allow BOLA/IDOR or cross-organization access — confirm with dual-account runtime tests."),
+                        ("path", candidate.Path),
+                        ("file", candidate.File),
+                        ("line", candidate.Line.ToString())),
+                    $"{candidate.File}:{candidate.Line} {candidate.Method} {candidate.Path}"));
+            }
+
+            string? artifactJson = null;
+            try
+            {
+                artifactJson = JsonSerializer.Serialize(new
+                {
+                    repository = MaskRepo(source.RepositoryUrl),
+                    branch = source.Branch,
+                    commit = clone.Commit,
+                    routeCount = inventory.Routes.Count,
+                    routes = inventory.Routes.Take(500),
+                    authzCandidates = inventory.AuthzCandidates.Take(100),
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+                if (fileStorage is not null)
+                {
+                    await using var ms = new MemoryStream(Encoding.UTF8.GetBytes(artifactJson));
+                    await fileStorage.UploadAsync(
+                        "scan-artifacts",
+                        $"scans/{scanId:N}/routes.json",
+                        ms,
+                        "application/json",
+                        cancellationToken);
+                    findings.Add(Finding("Info", "source.artifact.stored",
+                        P(("observed", $"Route inventory stored at scan-artifacts/scans/{scanId:N}/routes.json"),
+                            ("impact", "Artifact available for follow-up BOLA pack synthesis.")),
+                        $"scans/{scanId:N}/routes.json"));
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to store source inventory artifact for scan {ScanId}", scanId);
+            }
+
+            return new InventoryResult(findings, probePaths, artifactJson);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Source inventory failed for scan {ScanId}", scanId);
+            var safe = ScanSecretSanitizer.Sanitize(ex.Message, token);
+            return new InventoryResult(
+            [
+                Finding("Medium", "source.inventory.error",
+                    P(("observed", safe),
+                        ("impact", "Source-assisted enrichment skipped."),
+                        ("repository", MaskRepo(source.RepositoryUrl))),
+                    null)
+            ], [], null);
+        }
+        finally
+        {
+            TryDelete(workRoot);
+        }
+    }
+
+    private sealed record CloneOutcome(bool Ok, string Message, string? Commit);
+
+    private static async Task<CloneOutcome> CloneAsync(
+        string repositoryUrl,
+        string? branch,
+        string? token,
+        string cloneDir,
+        CancellationToken cancellationToken)
+    {
+        if (Directory.Exists(cloneDir))
+            Directory.Delete(cloneDir, true);
+
+        // Never put the PAT into the clone URL — git stderr often echoes that URL on failure.
+        var cleanUrl = StripUserInfo(repositoryUrl);
+        var args = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            var basic = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes(BuildBasicAuthUserInfo(cleanUrl, token)));
+            args.Append("-c ").Append(Quote($"http.extraHeader=AUTHORIZATION: basic {basic}")).Append(' ');
+        }
+
+        args.Append("clone --depth 1 --single-branch");
+        if (!string.IsNullOrWhiteSpace(branch))
+            args.Append(" --branch ").Append(Quote(branch));
+        args.Append(' ').Append(Quote(cleanUrl)).Append(' ').Append(Quote(cloneDir));
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = args.ToString(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        psi.Environment["GIT_ASKPASS"] = "echo";
+        psi.Environment["GCM_INTERACTIVE"] = "never";
+
+        using var process = new Process { StartInfo = psi };
+        try
+        {
+            if (!process.Start())
+                return new CloneOutcome(false, "Failed to start git process.", null);
+        }
+        catch (Exception ex)
+        {
+            return new CloneOutcome(false, ScanSecretSanitizer.Sanitize($"git is not available: {ex.Message}", token), null);
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(CloneTimeoutSeconds));
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            return new CloneOutcome(false, $"Clone timed out after {CloneTimeoutSeconds}s.", null);
+        }
+
+        var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
+        if (process.ExitCode != 0)
+        {
+            var msg = string.IsNullOrWhiteSpace(stderr) ? $"git exit {process.ExitCode}" : stderr.Trim();
+            return new CloneOutcome(false, ScanSecretSanitizer.Sanitize(msg, token), null);
+        }
+
+        var commit = await ReadCommitAsync(cloneDir, cancellationToken);
+        return new CloneOutcome(true, "ok", commit);
+    }
+
+    private static string BuildBasicAuthUserInfo(string repositoryUrl, string token)
+    {
+        var host = Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : "";
+        if (host.Contains("gitlab", StringComparison.OrdinalIgnoreCase))
+            return $"oauth2:{token}";
+        if (host.Contains("dev.azure.com", StringComparison.OrdinalIgnoreCase)
+            || host.Contains("visualstudio.com", StringComparison.OrdinalIgnoreCase))
+            return $":{token}";
+        // GitHub and most forges accept x-access-token
+        return $"x-access-token:{token}";
+    }
+
+    private static string StripUserInfo(string repositoryUrl)
+    {
+        if (!Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var uri))
+            return repositoryUrl;
+        var builder = new UriBuilder(uri) { UserName = "", Password = "" };
+        // UriBuilder may leave empty userinfo as "@" on some versions — normalize.
+        var cleaned = builder.Uri.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped);
+        return cleaned.Replace("://@", "://", StringComparison.Ordinal);
+    }
+
+    private static async Task<string?> ReadCommitAsync(string cloneDir, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = "rev-parse --short HEAD",
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(psi);
+            if (process is null) return null;
+            var output = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
+            await process.WaitForExitAsync(cancellationToken);
+            return process.ExitCode == 0 ? output : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private sealed record RouteHit(string Method, string Path, string File, int Line, bool HasObjectId);
+    private sealed record AuthzCandidate(string Method, string Path, string File, int Line);
+    private sealed record Extracted(IReadOnlyList<RouteHit> Routes, IReadOnlyList<AuthzCandidate> AuthzCandidates, int FilesScanned);
+
+    private static Extracted ExtractRoutes(string root, CancellationToken cancellationToken)
+    {
+        var routes = new List<RouteHit>();
+        var authz = new List<AuthzCandidate>();
+        var filesScanned = 0;
+
+        foreach (var file in EnumerateCodeFiles(root))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (filesScanned >= MaxFilesToScan) break;
+            filesScanned++;
+
+            string text;
+            try
+            {
+                text = File.ReadAllText(file);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (text.Length > 1_500_000) continue;
+            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            var ext = Path.GetExtension(file);
+
+            if (ext is ".cs")
+                ScanCsharp(text, relative, routes, authz);
+            else if (ext is ".ts" or ".tsx" or ".js" or ".jsx")
+                ScanJsTs(text, relative, routes, authz);
+            else if (ext is ".json" or ".yaml" or ".yml")
+                ScanOpenApi(text, relative, routes);
+            else if (ext is ".graphql" or ".gql")
+            {
+                if (text.Contains("type Query", StringComparison.Ordinal)
+                    || text.Contains("type Mutation", StringComparison.Ordinal))
+                    ScanGraphql(text, relative, routes);
+            }
+
+            // Next.js App Router: app/**/route.ts implies HTTP handlers
+            if (relative.Contains("/app/", StringComparison.OrdinalIgnoreCase)
+                && (relative.EndsWith("/route.ts", StringComparison.OrdinalIgnoreCase)
+                    || relative.EndsWith("/route.js", StringComparison.OrdinalIgnoreCase)))
+            {
+                var apiPath = NextAppRouteToPath(relative);
+                if (!string.IsNullOrWhiteSpace(apiPath))
+                    routes.Add(new RouteHit("ANY", apiPath, relative, 1, apiPath.Contains('{')));
+            }
+
+            if (relative.Contains("/pages/api/", StringComparison.OrdinalIgnoreCase)
+                && (ext is ".ts" or ".js" or ".tsx" or ".jsx"))
+            {
+                var apiPath = PagesApiToPath(relative);
+                if (!string.IsNullOrWhiteSpace(apiPath))
+                    routes.Add(new RouteHit("ANY", apiPath, relative, 1, apiPath.Contains('{')));
+            }
+        }
+
+        var deduped = routes
+            .GroupBy(r => $"{r.Method}|{r.Path}", StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new Extracted(deduped, authz, filesScanned);
+    }
+
+    private static void ScanCsharp(string text, string file, List<RouteHit> routes, List<AuthzCandidate> authz)
+    {
+        foreach (Match m in CsHttpAttributeRegex().Matches(text))
+        {
+            var method = m.Groups["method"].Value.ToUpperInvariant() switch
+            {
+                "HTTPGET" => "GET",
+                "HTTPPOST" => "POST",
+                "HTTPPUT" => "PUT",
+                "HTTPDELETE" => "DELETE",
+                "HTTPPATCH" => "PATCH",
+                _ => "ANY"
+            };
+            var path = NormalizeRouteTemplate(m.Groups["path"].Value);
+            var line = LineOf(text, m.Index);
+            var hit = new RouteHit(method, path, file, line, HasObjectId(path));
+            routes.Add(hit);
+            if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
+                authz.Add(new AuthzCandidate(method, path, file, line));
+        }
+
+        foreach (Match m in CsMapRegex().Matches(text))
+        {
+            var method = m.Groups["method"].Value.ToUpperInvariant();
+            var path = NormalizeRouteTemplate(m.Groups["path"].Value);
+            var line = LineOf(text, m.Index);
+            var hit = new RouteHit(method, path, file, line, HasObjectId(path));
+            routes.Add(hit);
+            if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
+                authz.Add(new AuthzCandidate(method, path, file, line));
+        }
+    }
+
+    private static void ScanJsTs(string text, string file, List<RouteHit> routes, List<AuthzCandidate> authz)
+    {
+        foreach (Match m in ExpressRouteRegex().Matches(text))
+        {
+            var method = m.Groups["method"].Value.ToUpperInvariant();
+            var path = NormalizeRouteTemplate(m.Groups["path"].Value);
+            var line = LineOf(text, m.Index);
+            var hit = new RouteHit(method, path, file, line, HasObjectId(path));
+            routes.Add(hit);
+            if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
+                authz.Add(new AuthzCandidate(method, path, file, line));
+        }
+    }
+
+    private static void ScanOpenApi(string text, string file, List<RouteHit> routes)
+    {
+        // JSON "paths": { "/foo": { "get": ...
+        foreach (Match m in OpenApiJsonPathRegex().Matches(text))
+        {
+            var path = NormalizeRouteTemplate(m.Groups["path"].Value);
+            routes.Add(new RouteHit("ANY", path, file, LineOf(text, m.Index), HasObjectId(path)));
+        }
+
+        // YAML:  /foo:
+        foreach (Match m in OpenApiYamlPathRegex().Matches(text))
+        {
+            var path = NormalizeRouteTemplate(m.Groups["path"].Value);
+            if (path.StartsWith('/') || path.Contains('{'))
+                routes.Add(new RouteHit("ANY", path.StartsWith('/') ? path : "/" + path, file, LineOf(text, m.Index), HasObjectId(path)));
+        }
+    }
+
+    private static void ScanGraphql(string text, string file, List<RouteHit> routes)
+    {
+        foreach (Match m in GraphqlFieldRegex().Matches(text))
+        {
+            var name = m.Groups["name"].Value;
+            routes.Add(new RouteHit("GQL", name, file, LineOf(text, m.Index), false));
+        }
+    }
+
+    private static bool LooksTenantGuarded(string text, int index)
+    {
+        var start = Math.Max(0, index - 400);
+        var end = Math.Min(text.Length, index + 1200);
+        var window = text[start..end];
+        return TenantGuardRegex().IsMatch(window);
+    }
+
+    private static IEnumerable<string> EnumerateCodeFiles(string root)
+    {
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var dir = stack.Pop();
+            IEnumerable<string> subdirs;
+            try { subdirs = Directory.EnumerateDirectories(dir); }
+            catch { continue; }
+
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (SkipDirNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                    continue;
+                stack.Push(sub);
+            }
+
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir); }
+            catch { continue; }
+
+            foreach (var file in files)
+            {
+                var ext = Path.GetExtension(file);
+                if (CodeExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase))
+                    yield return file;
+            }
+        }
+    }
+
+    private static string NormalizeProbePath(RouteHit route)
+    {
+        var path = route.Path.Trim();
+        if (route.Method.Equals("GQL", StringComparison.OrdinalIgnoreCase))
+            return "";
+        path = path.Split('?', 2)[0];
+        path = ObjectIdRegex().Replace(path, "1");
+        path = path.TrimStart('~', '/');
+        return path;
+    }
+
+    private static string NormalizeRouteTemplate(string raw)
+    {
+        var path = raw.Trim().Trim('"', '\'', '`');
+        if (!path.StartsWith('/') && !path.StartsWith('~') && !path.StartsWith('{'))
+            path = "/" + path;
+        return path.Replace("~/", "/");
+    }
+
+    private static bool HasObjectId(string path) =>
+        path.Contains('{') || path.Contains(':') || ObjectIdRegex().IsMatch(path);
+
+    private static string NextAppRouteToPath(string relative)
+    {
+        var idx = relative.IndexOf("/app/", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return "";
+        var rest = relative[(idx + 5)..];
+        if (rest.EndsWith("/route.ts", StringComparison.OrdinalIgnoreCase))
+            rest = rest[..^"/route.ts".Length];
+        else if (rest.EndsWith("/route.js", StringComparison.OrdinalIgnoreCase))
+            rest = rest[..^"/route.js".Length];
+        rest = rest.Replace("[", "{").Replace("]", "}");
+        return string.IsNullOrWhiteSpace(rest) ? "/" : "/" + rest.Trim('/');
+    }
+
+    private static string PagesApiToPath(string relative)
+    {
+        var marker = "/pages/api/";
+        var idx = relative.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return "";
+        var rest = relative[(idx + marker.Length)..];
+        rest = Path.ChangeExtension(rest, null)?.Replace('\\', '/') ?? rest;
+        rest = rest.Replace("[", "{").Replace("]", "}");
+        return "/api/" + rest.Trim('/');
+    }
+
+    private static string Quote(string value) =>
+        "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    private static string MaskRepo(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return "(unknown)";
+        var sanitized = ScanSecretSanitizer.Sanitize(url);
+        if (!Uri.TryCreate(sanitized, UriKind.Absolute, out var uri)) return "***";
+        var host = uri.Host;
+        if (host.StartsWith("github_pat_", StringComparison.OrdinalIgnoreCase)
+            || host.StartsWith("ghp_", StringComparison.OrdinalIgnoreCase)
+            || host.StartsWith("glpat-", StringComparison.OrdinalIgnoreCase))
+            return "(invalid-repository-url)";
+        var path = uri.AbsolutePath.TrimEnd('/');
+        var leaf = path.Length == 0 ? "" : path[(path.LastIndexOf('/') + 1)..];
+        return $"{uri.Scheme}://{host}/***/{leaf}";
+    }
+
+    private static long DirSize(string path, bool excludeSkipDirs)
+    {
+        long total = 0;
+        try
+        {
+            var stack = new Stack<string>();
+            stack.Push(path);
+            while (stack.Count > 0)
+            {
+                var dir = stack.Pop();
+                IEnumerable<string> subdirs;
+                try { subdirs = Directory.EnumerateDirectories(dir); }
+                catch { continue; }
+
+                foreach (var sub in subdirs)
+                {
+                    if (excludeSkipDirs)
+                    {
+                        var name = Path.GetFileName(sub);
+                        if (SkipDirNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                            continue;
+                    }
+                    stack.Push(sub);
+                }
+
+                IEnumerable<string> files;
+                try { files = Directory.EnumerateFiles(dir); }
+                catch { continue; }
+
+                foreach (var file in files)
+                {
+                    try { total += new FileInfo(file).Length; }
+                    catch { /* ignore */ }
+                    if (total > MaxWorktreeBytes) return total;
+                }
+            }
+        }
+        catch { /* ignore */ }
+        return total;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+        }
+        catch
+        {
+            // best effort
+        }
+    }
+
+    private static int LineOf(string text, int index)
+    {
+        var line = 1;
+        for (var i = 0; i < index && i < text.Length; i++)
+            if (text[i] == '\n') line++;
+        return line;
+    }
+
+    private static Dictionary<string, string> P(params (string Key, string Value)[] pairs)
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in pairs)
+            dict[key] = value;
+        return dict;
+    }
+
+    private static ScanFindingDto Finding(
+        string severity,
+        string code,
+        IReadOnlyDictionary<string, string> parameters,
+        string? evidence) =>
+        new(
+            CheckDef.Id,
+            CheckDef.Name,
+            severity,
+            code,
+            code,
+            evidence,
+            "",
+            CheckDef.Tools,
+            null,
+            code,
+            parameters);
+
+    [GeneratedRegex("""\[Http(?<method>Get|Post|Put|Delete|Patch)\(\s*"(?<path>[^"]+)"\s*\)\]""", RegexOptions.IgnoreCase)]
+    private static partial Regex CsHttpAttributeRegex();
+
+    [GeneratedRegex("""Map(?<method>Get|Post|Put|Delete|Patch)\(\s*"(?<path>[^"]+)" """, RegexOptions.IgnoreCase)]
+    private static partial Regex CsMapRegex();
+
+    [GeneratedRegex("""\.(?<method>get|post|put|delete|patch)\(\s*['"`](?<path>[^'"`]+)['"`]""", RegexOptions.IgnoreCase)]
+    private static partial Regex ExpressRouteRegex();
+
+    [GeneratedRegex("\"(?<path>/[^\"]+)\"\\s*:\\s*\\{", RegexOptions.IgnoreCase)]
+    private static partial Regex OpenApiJsonPathRegex();
+
+    [GeneratedRegex("""^\s{0,4}(?<path>/[A-Za-z0-9_{}\-./]+):\s*$""", RegexOptions.Multiline)]
+    private static partial Regex OpenApiYamlPathRegex();
+
+    [GeneratedRegex("""(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(""", RegexOptions.Multiline)]
+    private static partial Regex GraphqlFieldRegex();
+
+    [GeneratedRegex("""\{[^}]+\}|:[A-Za-z_][A-Za-z0-9_]*""", RegexOptions.IgnoreCase)]
+    private static partial Regex ObjectIdRegex();
+
+    [GeneratedRegex(
+        """ClinicId|OrganizationId|OrgId|TenantId|HospitalId|EnsureSameOrg|EnsureOrg|BelongToOrg|CurrentClinic|RequireOrganization""",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex TenantGuardRegex();
+}

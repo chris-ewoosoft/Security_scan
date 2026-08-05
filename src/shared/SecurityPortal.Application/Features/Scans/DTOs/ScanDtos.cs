@@ -8,7 +8,8 @@ public record StartWebsiteScanRequest(
     IReadOnlyList<string>? Checks = null,
     IReadOnlyList<string>? Tools = null,
     string? ReportType = null,
-    StartScanAuthRequest? Auth = null);
+    StartScanAuthRequest? Auth = null,
+    StartScanSourceRequest? Source = null);
 
 public record StartScanAuthRequest(
     string? Type = null,
@@ -19,6 +20,11 @@ public record StartScanAuthRequest(
     string? UsernameField = null,
     string? PasswordField = null,
     string? ClinicId = null);
+
+public record StartScanSourceRequest(
+    string? RepositoryUrl = null,
+    string? Branch = null,
+    string? Token = null);
 
 public record ScanCatalogDto(
     IReadOnlyList<ScanCheckDto> Checks,
@@ -87,7 +93,8 @@ public record ScanConfigurationDto(
     IReadOnlyList<string> Checks,
     IReadOnlyList<string> Tools,
     string ReportType,
-    ScanAuthDto? Auth = null);
+    ScanAuthDto? Auth = null,
+    ScanSourceDto? Source = null);
 
 /// <summary>Auth metadata returned to clients — never includes password.</summary>
 public record ScanAuthDto(
@@ -97,6 +104,13 @@ public record ScanAuthDto(
     string? UsernameMasked,
     string? SuccessUrlContains,
     string? ClinicIdMasked = null);
+
+/// <summary>Source metadata — never includes token.</summary>
+public record ScanSourceDto(
+    bool Enabled,
+    string? RepositoryUrlMasked,
+    string? Branch,
+    bool HasToken);
 
 public static class WebsiteScanMappings
 {
@@ -132,8 +146,31 @@ public static class WebsiteScanMappings
                 config.Checks,
                 config.Tools,
                 config.ReportType,
-                ToAuthDto(config.Auth)),
+                ToAuthDto(config.Auth),
+                ToSourceDto(config.Source)),
             report);
+    }
+
+    public static ScanSourceDto? ToSourceDto(ScanSourceConfiguration? source)
+    {
+        if (source is null || !source.IsEnabled)
+            return source is null ? null : new ScanSourceDto(false, null, null, false);
+
+        return new ScanSourceDto(
+            true,
+            MaskRepositoryUrl(source.RepositoryUrl),
+            source.Branch,
+            !string.IsNullOrWhiteSpace(source.TokenCipher));
+    }
+
+    public static string? MaskRepositoryUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            return MaskUsername(url);
+        var path = uri.AbsolutePath.TrimEnd('/');
+        var leaf = path.Length == 0 ? uri.Host : path[(path.LastIndexOf('/') + 1)..];
+        return $"{uri.Scheme}://{uri.Host}/***/{leaf}";
     }
 
     public static ScanAuthDto? ToAuthDto(ScanAuthConfiguration? auth)

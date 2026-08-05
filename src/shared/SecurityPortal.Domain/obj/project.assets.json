@@ -8,7 +8,7 @@
     "net10.0": []
   },
   "packageFolders": {
-    "C:\\Users\\Chris\\.nuget\\packages\\": {},
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
@@ -17,7 +17,7 @@
       "projectUniqueName": "D:\\Security Portal\\src\\shared\\SecurityPortal.Domain\\SecurityPortal.Domain.csproj",
       "projectName": "SecurityPortal.Domain",
       "projectPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Domain\\SecurityPortal.Domain.csproj",
-      "packagesPath": "C:\\Users\\Chris\\.nuget\\packages\\",
+      "packagesPath": "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget",
       "outputPath": "D:\\Security Portal\\src\\shared\\SecurityPortal.Domain\\obj\\",
       "projectStyle": "PackageReference",
       "centralPackageVersionsManagementEnabled": true,

@@ -1693,3 +1693,228 @@ body.page-config .topbar {
     gap: 0.35rem;
   }
 }
+
+/* ── Introduce panel ───────────────────────────────────── */
+.home-introduce-panel {
+  animation: rise 0.45s ease-out both;
+}
+
+.home-introduce-panel[hidden] {
+  display: none !important;
+}
+
+.introduce-panel-inner .report-hero {
+  margin-bottom: 0.75rem;
+}
+
+.introduce-body {
+  display: grid;
+  gap: 0;
+}
+
+.introduce-hero {
+  padding-bottom: 0.5rem;
+}
+
+.introduce-lede {
+  max-width: none;
+  color: var(--muted);
+}
+
+.introduce-section {
+  padding: 1.1rem 0 0.5rem;
+  border-top: 1px solid var(--line);
+  margin-top: 0.75rem;
+}
+
+.introduce-section-last {
+  padding-bottom: 1.5rem;
+}
+
+.introduce-section h3 {
+  margin: 0 0 0.85rem;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.introduce-section p {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.introduce-section ul,
+.introduce-section ol {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.introduce-section ul li,
+.introduce-section ol li {
+  margin-bottom: 0.35rem;
+}
+
+.introduce-section code {
+  font-size: 0.85em;
+  background: rgba(63, 224, 197, 0.1);
+  color: var(--teal-bright);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+
+.introduce-checks-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem 2rem;
+}
+
+.introduce-check-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.introduce-check-group-label {
+  margin: 0.65rem 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--teal-bright);
+}
+
+.introduce-check-group:first-child .introduce-check-group-label:first-child {
+  margin-top: 0;
+}
+
+.introduce-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  background: rgba(7, 16, 24, 0.35);
+  font-size: 0.9rem;
+}
+
+.introduce-table th,
+.introduce-table td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.45;
+}
+
+.introduce-table thead th {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.introduce-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.introduce-risk-note {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  background: rgba(7, 16, 24, 0.35);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.introduce-risk-scale {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-top: 0.35rem;
+  font-weight: 600;
+}
+
+.introduce-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.introduce-steps li {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.65rem;
+  align-items: start;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line);
+  background: rgba(7, 16, 24, 0.35);
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+.introduce-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  background: rgba(63, 224, 197, 0.15);
+  color: var(--teal-bright);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.9rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.introduce-role {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 3px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.introduce-role-admin {
+  background: rgba(239, 107, 107, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(239, 107, 107, 0.3);
+}
+
+.introduce-role-engineer {
+  background: rgba(63, 224, 197, 0.12);
+  color: var(--teal-bright);
+  border: 1px solid rgba(63, 224, 197, 0.3);
+}
+
+.introduce-role-viewer {
+  background: rgba(138, 163, 181, 0.12);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.introduce-security-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.introduce-security-list li {
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--line);
+  background: rgba(7, 16, 24, 0.3);
+  line-height: 1.5;
+}
+
+@media (max-width: 820px) {
+  .introduce-checks-grid {
+    grid-template-columns: 1fr;
+  }
+}

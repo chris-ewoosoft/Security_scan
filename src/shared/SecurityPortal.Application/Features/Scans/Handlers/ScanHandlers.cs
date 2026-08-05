@@ -25,11 +25,27 @@ public class StartWebsiteScanCommandHandler(
             config.ReportType = request.ReportType;
 
         config.Auth = BuildAuth(request.Auth);
+        config.Source = BuildSource(request.Source);
 
         var scan = WebsiteScan.Create(request.TargetUrl, config, request.UserId, request.OrganizationId);
         await scanRepository.AddAsync(scan, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return WebsiteScanMappings.ToDto(scan);
+    }
+
+    private ScanSourceConfiguration? BuildSource(StartScanSourceRequest? source)
+    {
+        if (source is null || string.IsNullOrWhiteSpace(source.RepositoryUrl))
+            return null;
+
+        return new ScanSourceConfiguration
+        {
+            RepositoryUrl = source.RepositoryUrl.Trim(),
+            Branch = string.IsNullOrWhiteSpace(source.Branch) ? null : source.Branch.Trim(),
+            TokenCipher = string.IsNullOrWhiteSpace(source.Token)
+                ? null
+                : secretProtector.Protect(source.Token),
+        };
     }
 
     private ScanAuthConfiguration? BuildAuth(StartScanAuthRequest? auth)

@@ -79,7 +79,10 @@ public sealed class WebsiteScanProcessor(
                 var config = scan.GetConfiguration();
                 using var handler = CreateScanHandler();
                 using var client = CreateScanClient(handler);
-                var result = await AnalyzeAsync(handler, client, scan.Id, scan.TargetUrl, config, scanToken);
+                IFileStorage? fileStorage = null;
+                try { fileStorage = scope.ServiceProvider.GetService<IFileStorage>(); }
+                catch { /* optional */ }
+                var result = await AnalyzeAsync(handler, client, scan.Id, scan.TargetUrl, config, fileStorage, scanToken);
 
                 // Drop tracked entity so we cannot overwrite a concurrent Cancelled row.
                 db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
@@ -122,7 +125,7 @@ public sealed class WebsiteScanProcessor(
                 var fresh = await scans.GetByIdAsync(scan.Id, stoppingToken);
                 if (fresh is not null && fresh.Status == ScanStatus.Running)
                 {
-                    fresh.MarkFailed(ex.Message);
+                    fresh.MarkFailed(ScanSecretSanitizer.Sanitize(ex.Message));
                     await unitOfWork.SaveChangesAsync(stoppingToken);
                 }
             }
@@ -168,11 +171,31 @@ public sealed class WebsiteScanProcessor(
         Guid scanId,
         string targetUrl,
         ScanConfiguration config,
+        IFileStorage? fileStorage,
         CancellationToken cancellationToken)
     {
         var authFindings = new List<ScanFindingDto>();
+        var sourceFindings = new List<ScanFindingDto>();
+        var sourceProbePaths = new List<string>();
         var authenticated = false;
         string? authNote = null;
+
+        if (config.Source?.IsEnabled == true
+            && !config.Checks.Contains(SourceRouteInventoryAnalyzer.CheckId, StringComparer.OrdinalIgnoreCase))
+        {
+            config.Checks.Add(SourceRouteInventoryAnalyzer.CheckId);
+            if (!config.Tools.Contains("source-analyzer", StringComparer.OrdinalIgnoreCase))
+                config.Tools.Add("source-analyzer");
+        }
+
+        if (config.Source?.IsEnabled == true)
+        {
+            await EnsureNotCancelledAsync(scanId, cancellationToken);
+            var inventory = await SourceRouteInventoryAnalyzer.AnalyzeAsync(
+                scanId, config.Source, secretProtector, fileStorage, logger, cancellationToken);
+            sourceFindings.AddRange(inventory.Findings);
+            sourceProbePaths.AddRange(inventory.ProbePaths);
+        }
 
         if (config.Auth?.IsEnabled == true)
         {
@@ -195,7 +218,7 @@ public sealed class WebsiteScanProcessor(
             {
                 await EnsureNotCancelledAsync(scanId, cancellationToken);
                 authFindings.AddRange(await EvaluateAuthenticatedSurfaceAsync(
-                    handler, client, targetUrl, cancellationToken));
+                    handler, client, targetUrl, sourceProbePaths, cancellationToken));
             }
             else
             {
@@ -223,12 +246,14 @@ public sealed class WebsiteScanProcessor(
 
         var selectedChecks = config.Checks
             .Select(id => ScanCatalog.Checks.First(c => c.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
-            .Where(c => !c.Id.Equals("authenticated-scan", StringComparison.OrdinalIgnoreCase))
+            .Where(c => !c.Id.Equals("authenticated-scan", StringComparison.OrdinalIgnoreCase)
+                        && !c.Id.Equals(SourceRouteInventoryAnalyzer.CheckId, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var deepClient = client;
 
         var findings = new List<ScanFindingDto>();
+        findings.AddRange(sourceFindings);
         findings.AddRange(authFindings);
 
         foreach (var check in selectedChecks)
@@ -312,6 +337,7 @@ public sealed class WebsiteScanProcessor(
         HttpClientHandler authHandler,
         HttpClient authClient,
         string targetUrl,
+        IReadOnlyList<string> extraProbePaths,
         CancellationToken cancellationToken)
     {
         var findings = new List<ScanFindingDto>();
@@ -338,7 +364,7 @@ public sealed class WebsiteScanProcessor(
         using var anonHandler = CreateScanHandler();
         using var anonClient = CreateScanClient(anonHandler);
 
-        findings.AddRange(await DiffAuthzPathsAsync(anonClient, authClient, targetUrl, cancellationToken));
+        findings.AddRange(await DiffAuthzPathsAsync(anonClient, authClient, targetUrl, extraProbePaths, cancellationToken));
 
         foreach (var api in apiBases.Where(u => u.Contains("graphql", StringComparison.OrdinalIgnoreCase)).Take(3))
         {
@@ -474,15 +500,28 @@ public sealed class WebsiteScanProcessor(
         HttpClient anonClient,
         HttpClient authClient,
         string targetUrl,
+        IReadOnlyList<string> extraProbePaths,
         CancellationToken cancellationToken)
     {
         var findings = new List<ScanFindingDto>();
         var baseUri = new Uri(targetUrl.TrimEnd('/') + "/");
-        var paths = new[]
+        var paths = new List<string>
         {
             "dashboard", "general/dashboard", "app", "home", "profile", "settings",
-            "account", "admin", "api", "me", "user", "patients", "chart"
+            "account", "admin", "api", "me", "user", "patients", "chart",
+            "event", "event/export", "event/next", "event/previous",
+            "event/print/calendar", "event/print/planning"
         };
+        foreach (var extra in extraProbePaths)
+        {
+            if (string.IsNullOrWhiteSpace(extra)) continue;
+            paths.Add(extra.Trim().TrimStart('/'));
+        }
+
+        paths = paths
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(80)
+            .ToList();
 
         var diffs = new List<string>();
         foreach (var path in paths)

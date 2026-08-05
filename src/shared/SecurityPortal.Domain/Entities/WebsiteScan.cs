@@ -146,6 +146,7 @@ public sealed class ScanConfiguration
     public List<string> Tools { get; set; } = [];
     public string ReportType { get; set; } = ScanCatalog.DefaultReportType;
     public ScanAuthConfiguration? Auth { get; set; }
+    public ScanSourceConfiguration? Source { get; set; }
 
     public static ScanConfiguration CreateDefault()
     {
@@ -190,6 +191,64 @@ public sealed class ScanConfiguration
             throw new DomainException("Select a valid security report type.");
 
         Auth?.Validate();
+        Source?.Validate();
+    }
+}
+
+/// <summary>Optional Git source attachment for white-box route inventory.</summary>
+public sealed class ScanSourceConfiguration
+{
+    public string? RepositoryUrl { get; set; }
+    public string? Branch { get; set; }
+    /// <summary>AES-GCM ciphertext for PAT / deploy token. Never expose via API DTO.</summary>
+    public string? TokenCipher { get; set; }
+
+    public bool IsEnabled => !string.IsNullOrWhiteSpace(RepositoryUrl);
+
+    public void Validate()
+    {
+        if (!IsEnabled)
+        {
+            RepositoryUrl = null;
+            Branch = null;
+            TokenCipher = null;
+            return;
+        }
+
+        var url = RepositoryUrl!.Trim();
+        if (url.StartsWith("git@", StringComparison.OrdinalIgnoreCase))
+            throw new DomainException("Use an https:// Git URL (SSH git@ is not supported yet).");
+
+        if (!url.Contains("://", StringComparison.Ordinal))
+            url = "https://" + url;
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new DomainException("Source repository URL must be a valid http(s) Git URL.");
+        }
+
+        if (uri.Scheme.Equals(Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase) ||
+            uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DomainException("Local or file:// repository URLs are not allowed.");
+        }
+
+        RepositoryUrl = uri.ToString().TrimEnd('/');
+        if (uri.Host.StartsWith("github_pat_", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.StartsWith("ghp_", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.StartsWith("glpat-", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.Contains("_pat_", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DomainException(
+                "Repository URL looks like a Personal Access Token. Put the token in the Token/PAT field and use an https://github.com/org/repo.git URL.");
+        }
+
+        Branch = string.IsNullOrWhiteSpace(Branch) ? null : Branch.Trim();
+        if (Branch is { Length: > 200 })
+            throw new DomainException("Branch name is too long.");
     }
 }
 

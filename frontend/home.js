@@ -36,6 +36,9 @@
   const navFunctionsMenu = document.querySelector('[data-nav-menu="functions"]');
   const navConfig = document.querySelector('[data-nav="config"]');
   const navHistory = document.querySelector('[data-nav="history"]');
+  const navIntroduce = document.querySelector('[data-nav="introduce"]');
+  const introducePanel = document.getElementById("introduce-panel");
+  const IntroducePanel = window.SecurityPortalIntroduce;
   const authEnabled = document.getElementById("auth-enabled");
   const authFields = document.getElementById("auth-fields");
   const authType = document.getElementById("auth-type");
@@ -44,6 +47,11 @@
   const authPassword = document.getElementById("auth-password");
   const authClinic = document.getElementById("auth-clinic");
   const authSuccess = document.getElementById("auth-success");
+  const sourceEnabled = document.getElementById("source-enabled");
+  const sourceFields = document.getElementById("source-fields");
+  const sourceRepo = document.getElementById("source-repo");
+  const sourceBranch = document.getElementById("source-branch");
+  const sourceToken = document.getElementById("source-token");
 
   function syncAuthFields() {
     if (!authFields) return;
@@ -58,9 +66,16 @@
     }
   }
 
+  function syncSourceFields() {
+    if (!sourceFields) return;
+    sourceFields.hidden = !sourceEnabled?.checked;
+  }
+
   authEnabled?.addEventListener("change", syncAuthFields);
   authType?.addEventListener("change", syncAuthFields);
+  sourceEnabled?.addEventListener("change", syncSourceFields);
   syncAuthFields();
+  syncSourceFields();
 
   function buildAuthPayload() {
     if (!authEnabled?.checked) return null;
@@ -83,6 +98,20 @@
     return payload;
   }
 
+  function buildSourcePayload() {
+    if (!sourceEnabled?.checked) return null;
+    const repositoryUrl = (sourceRepo?.value || "").trim();
+    if (!repositoryUrl) {
+      throw new Error(t("source.repoRequired"));
+    }
+    const payload = { repositoryUrl };
+    const branch = (sourceBranch?.value || "").trim();
+    if (branch) payload.branch = branch;
+    const token = sourceToken?.value || "";
+    if (token) payload.token = token;
+    return payload;
+  }
+
   let catalog = null;
   let pollTimer = null;
   let progressTimer = null;
@@ -91,7 +120,8 @@
   let scanProgressStartedAt = null;
   let configMount = null;
   let historyMount = null;
-  let rightView = "placeholder"; // placeholder | report | config | history
+  let introduceMount = null;
+  let rightView = "placeholder"; // placeholder | report | config | history | introduce
 
   document.querySelectorAll("[data-lang]").forEach((btn) => {
     btn.addEventListener("click", () => I18n?.setLocale(btn.getAttribute("data-lang")));
@@ -178,11 +208,12 @@
   }
 
   function setNavActive(view) {
-    const onFunctions = view === "config" || view === "history";
+    const onFunctions = view === "config" || view === "history" || view === "introduce";
     navHome?.classList.toggle("is-active", view === "placeholder" || view === "report");
     navFunctions?.classList.toggle("is-active", onFunctions);
     navConfig?.classList.toggle("is-active", view === "config");
     navHistory?.classList.toggle("is-active", view === "history");
+    navIntroduce?.classList.toggle("is-active", view === "introduce");
     if (!onFunctions) setFunctionsMenuOpen(false);
   }
 
@@ -207,6 +238,7 @@
     reportPanel.hidden = view !== "report";
     configPanel.hidden = view !== "config";
     historyPanel.hidden = view !== "history";
+    if (introducePanel) introducePanel.hidden = view !== "introduce";
     setNavActive(view);
 
     if (view === "config") {
@@ -257,6 +289,21 @@
     } else if (view === "report" && lastScan) {
       const id = lastScan.id && lastScan.id !== "pending" ? lastScan.id : null;
       history.replaceState(null, "", id ? `/?id=${encodeURIComponent(id)}` : "/");
+    } else if (view === "introduce") {
+      history.replaceState(null, "", "/?view=introduce");
+      if (introduceMount) {
+        introduceMount.destroy?.();
+        introduceMount = null;
+      }
+      if (IntroducePanel && introducePanel) {
+        introduceMount = IntroducePanel.mount(introducePanel, {
+          onClose() {
+            if (lastScan) showRight("report");
+            else showRight("placeholder");
+            history.replaceState(null, "", leavePanelUrl());
+          },
+        });
+      }
     } else if (view === "placeholder") {
       history.replaceState(null, "", "/");
     }
@@ -324,6 +371,10 @@
     event.preventDefault();
     showRight("history");
   });
+  navIntroduce?.addEventListener("click", (event) => {
+    event.preventDefault();
+    showRight("introduce");
+  });
   navHome?.addEventListener("click", (event) => {
     if (rightView === "config" || rightView === "history") {
       event.preventDefault();
@@ -345,12 +396,18 @@
     }
 
     let auth;
+    let source;
     try {
       auth = buildAuthPayload();
+      source = buildSourcePayload();
     } catch (authErr) {
       formError.hidden = false;
       formError.textContent = authErr.message || t("auth.required");
-      authUsername?.focus();
+      if (String(authErr.message || "").includes("Git") || String(authErr.message || "").includes("source")) {
+        sourceRepo?.focus();
+      } else {
+        authUsername?.focus();
+      }
       return;
     }
 
@@ -358,6 +415,9 @@
     const checks = [...(config.checks || [])];
     if (auth && !checks.some((c) => String(c).toLowerCase() === "authenticated-scan")) {
       checks.push("authenticated-scan");
+    }
+    if (source && !checks.some((c) => String(c).toLowerCase() === "route-inventory")) {
+      checks.push("route-inventory");
     }
 
     scanBtn.disabled = true;
@@ -370,7 +430,12 @@
       status: "Queued",
       summary: t("report.processing"),
       reportType: config.reportType,
-      configuration: { ...config, checks, auth: auth ? { type: auth.type, enabled: true } : null },
+      configuration: {
+        ...config,
+        checks,
+        auth: auth ? { type: auth.type, enabled: true } : null,
+        source: source ? { enabled: true, repositoryUrlMasked: source.repositoryUrl } : null,
+      },
       report: null,
     });
 
@@ -382,6 +447,7 @@
         reportType: config.reportType,
       };
       if (auth) body.auth = auth;
+      if (source) body.source = source;
 
       const res = await apiFetch("/scans", {
         method: "POST",
@@ -865,6 +931,7 @@
   loadCatalog().then(async () => {
     if (initialView === "config") showRight("config");
     else if (initialView === "history") showRight("history");
+    else if (initialView === "introduce") showRight("introduce");
     else if (initialId) await showReport(initialId);
     else showRight("placeholder");
   });
