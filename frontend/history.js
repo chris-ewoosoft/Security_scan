@@ -10,7 +10,6 @@ window.SecurityPortalHistory = (() => {
           <div>
             <p class="eyebrow">${escapeHtml(t("history.eyebrow"))}</p>
             <h2 class="page-title">${escapeHtml(t("history.title"))}</h2>
-            <p class="lede">${escapeHtml(t("history.lede"))}</p>
           </div>
           <div class="history-hero-actions">
             <button type="button" class="ghost-btn danger-btn" data-action="delete-selected" disabled>

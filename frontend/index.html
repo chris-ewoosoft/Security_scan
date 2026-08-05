@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=27" />
+  <link rel="stylesheet" href="/styles.css?v=28" />
 </head>
 <body class="page-home">
   <div class="atmosphere" aria-hidden="true"></div>
@@ -17,8 +17,22 @@
     <a class="brand" href="/">Security Portal</a>
     <nav class="main-nav">
       <a class="nav-item is-active" href="/" data-nav="home" data-i18n="nav.home">Trang chủ</a>
-      <a class="nav-item" href="/?view=config" data-nav="config" data-i18n="nav.config">Cấu hình</a>
-      <a class="nav-item" href="/?view=history" data-nav="history" data-i18n="nav.history">Lịch sử</a>
+      <div class="nav-dropdown" data-nav-menu="functions">
+        <button
+          type="button"
+          class="nav-item nav-dropdown-toggle"
+          aria-expanded="false"
+          aria-haspopup="true"
+          data-nav="functions"
+          data-i18n="nav.functions"
+        >
+          Chức năng
+        </button>
+        <div class="nav-dropdown-menu" role="menu">
+          <a class="nav-dropdown-item" href="/?view=config" role="menuitem" data-nav="config" data-i18n="nav.config">Cấu hình</a>
+          <a class="nav-dropdown-item" href="/?view=history" role="menuitem" data-nav="history" data-i18n="nav.history">Lịch sử</a>
+        </div>
+      </div>
     </nav>
     <div class="lang-switch" role="group" aria-label="Language">
       <button type="button" class="lang-btn" data-lang="vi" data-i18n="lang.vi">VI</button>
@@ -30,7 +44,6 @@
     <section class="home-left" aria-label="Security Portal">
       <p class="brand-mark">Security Portal</p>
       <h1 data-i18n="home.title">Quét bảo mật website</h1>
-      <p class="lede" data-i18n="home.lede">Cột trái: scan. Cột phải: Cấu hình, Lịch sử hoặc Technical Report.</p>
 
       <form id="scan-form" class="scan-form" autocomplete="off">
         <label class="sr-only" for="target-url" data-i18n="home.urlLabel">Địa chỉ website cần scan</label>
@@ -195,11 +208,11 @@
     </section>
   </main>
 
-  <script src="/i18n.js?v=6"></script>
+  <script src="/i18n.js?v=27"></script>
   <script src="/api-client.js?v=7"></script>
   <script src="/config-store.js?v=3"></script>
   <script src="/configure.js?v=9"></script>
-  <script src="/history.js?v=6"></script>
-  <script src="/home.js?v=24"></script>
+  <script src="/history.js?v=7"></script>
+  <script src="/home.js?v=26"></script>
 </body>
 </html>

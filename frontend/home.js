@@ -32,6 +32,8 @@
   const openHistoryBtn = document.getElementById("open-history-btn");
   const exportReportBtn = document.getElementById("export-report-btn");
   const navHome = document.querySelector('[data-nav="home"]');
+  const navFunctions = document.querySelector('[data-nav="functions"]');
+  const navFunctionsMenu = document.querySelector('[data-nav-menu="functions"]');
   const navConfig = document.querySelector('[data-nav="config"]');
   const navHistory = document.querySelector('[data-nav="history"]');
   const authEnabled = document.getElementById("auth-enabled");
@@ -169,11 +171,35 @@
     return id ? `/?id=${encodeURIComponent(id)}` : "/";
   }
 
+  function setFunctionsMenuOpen(open) {
+    if (!navFunctionsMenu || !navFunctions) return;
+    navFunctionsMenu.classList.toggle("is-open", open);
+    navFunctions.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
   function setNavActive(view) {
+    const onFunctions = view === "config" || view === "history";
     navHome?.classList.toggle("is-active", view === "placeholder" || view === "report");
+    navFunctions?.classList.toggle("is-active", onFunctions);
     navConfig?.classList.toggle("is-active", view === "config");
     navHistory?.classList.toggle("is-active", view === "history");
+    if (!onFunctions) setFunctionsMenuOpen(false);
   }
+
+  navFunctions?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const open = navFunctions.getAttribute("aria-expanded") !== "true";
+    setFunctionsMenuOpen(open);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!navFunctionsMenu?.contains(e.target)) setFunctionsMenuOpen(false);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") setFunctionsMenuOpen(false);
+  });
 
   function showRight(view) {
     rightView = view;

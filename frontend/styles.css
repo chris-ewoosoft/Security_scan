@@ -127,12 +127,75 @@ body {
 .main-nav .nav-item {
   padding: 0.45rem 0.85rem;
   border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--muted);
+  text-decoration: none;
 }
 
 .main-nav .nav-item.is-active {
   color: var(--fog);
   border-color: var(--line);
   background: rgba(31, 184, 160, 0.1);
+}
+
+.nav-dropdown {
+  position: relative;
+}
+
+.nav-dropdown-toggle::after {
+  content: "";
+  display: inline-block;
+  margin-left: 0.4rem;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  vertical-align: middle;
+  opacity: 0.75;
+}
+
+.nav-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  min-width: 10.5rem;
+  padding: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: rgba(10, 22, 32, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  z-index: 40;
+}
+
+.nav-dropdown.is-open .nav-dropdown-menu,
+.nav-dropdown:hover .nav-dropdown-menu,
+.nav-dropdown:focus-within .nav-dropdown-menu {
+  display: block;
+}
+
+.nav-dropdown-item {
+  display: block;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.35rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.nav-dropdown-item:hover {
+  color: var(--teal-bright);
+  background: rgba(31, 184, 160, 0.1);
+}
+
+.nav-dropdown-item.is-active {
+  color: var(--fog);
+  background: rgba(31, 184, 160, 0.14);
 }
 
 body.page-config .atmosphere {
