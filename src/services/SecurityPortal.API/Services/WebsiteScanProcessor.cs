@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -78,7 +79,7 @@ public sealed class WebsiteScanProcessor(
                 var config = scan.GetConfiguration();
                 using var handler = CreateScanHandler();
                 using var client = CreateScanClient(handler);
-                var result = await AnalyzeAsync(client, scan.Id, scan.TargetUrl, config, scanToken);
+                var result = await AnalyzeAsync(handler, client, scan.Id, scan.TargetUrl, config, scanToken);
 
                 // Drop tracked entity so we cannot overwrite a concurrent Cancelled row.
                 db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
@@ -162,6 +163,7 @@ public sealed class WebsiteScanProcessor(
     }
 
     private async Task<AnalysisResult> AnalyzeAsync(
+        HttpClientHandler handler,
         HttpClient client,
         Guid scanId,
         string targetUrl,
@@ -188,6 +190,20 @@ public sealed class WebsiteScanProcessor(
                         ("loginUrl", login.LoginUrl),
                         ("authType", config.Auth.Type)),
                     $"authType={config.Auth.Type}; loginUrl={login.LoginUrl}"));
+
+            if (login.Success)
+            {
+                await EnsureNotCancelledAsync(scanId, cancellationToken);
+                authFindings.AddRange(await EvaluateAuthenticatedSurfaceAsync(
+                    handler, client, targetUrl, cancellationToken));
+            }
+            else
+            {
+                authFindings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "Info", "auth.coverage.skipped",
+                    P(("observed", "Authenticated surface probes were skipped because login failed."),
+                        ("impact", "Post-login API, session-cookie, and authz-diff checks were not run.")),
+                    "coverage=skipped"));
+            }
         }
 
         var sw = Stopwatch.StartNew();
@@ -210,7 +226,6 @@ public sealed class WebsiteScanProcessor(
             .Where(c => !c.Id.Equals("authenticated-scan", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        // Prefer authenticated session for deep probes when login succeeded.
         var deepClient = client;
 
         var findings = new List<ScanFindingDto>();
@@ -223,13 +238,9 @@ public sealed class WebsiteScanProcessor(
             var tools = check.Tools.Where(t => config.Tools.Contains(t, StringComparer.OrdinalIgnoreCase)).ToList();
             if (tools.Count == 0) tools = check.Tools.ToList();
 
-            var needsAuthSession = check.Id is "directory-discovery" or "sensitive-file-scan" or "cookie-security";
+            var needsAuthSession = check.Id is "directory-discovery" or "sensitive-file-scan";
             if (needsAuthSession && config.Auth?.IsEnabled == true && !authenticated)
-            {
-                // Skip deep auth-dependent probes when login failed (except we still evaluate public cookie header above).
-                if (check.Id is "directory-discovery" or "sensitive-file-scan")
-                    continue;
-            }
+                continue;
 
             IEnumerable<ScanFindingDto> batch = check.Id switch
             {
@@ -264,8 +275,11 @@ public sealed class WebsiteScanProcessor(
             findings.Count(f => f.Severity == "Medium"), config.ReportType, "en");
         if (config.Auth?.IsEnabled == true)
         {
+            var authSurfaceCount = findings.Count(f =>
+                f.Code.StartsWith("auth.surface.", StringComparison.OrdinalIgnoreCase)
+                || f.Code.StartsWith("auth.session.", StringComparison.OrdinalIgnoreCase));
             executive += authenticated
-                ? " Authenticated session established."
+                ? $" Authenticated session established; {authSurfaceCount} post-login surface finding(s)."
                 : " Authentication failed; post-login coverage limited.";
         }
 
@@ -292,6 +306,299 @@ public sealed class WebsiteScanProcessor(
             hasHttps,
             server,
             report);
+    }
+
+    private async Task<IReadOnlyList<ScanFindingDto>> EvaluateAuthenticatedSurfaceAsync(
+        HttpClientHandler authHandler,
+        HttpClient authClient,
+        string targetUrl,
+        CancellationToken cancellationToken)
+    {
+        var findings = new List<ScanFindingDto>();
+        var tools = AuthCheckDef.Tools;
+
+        findings.AddRange(EvaluateSessionCookies(authHandler, targetUrl));
+
+        var apiBases = DiscoverAuthenticatedApiBases(authHandler, targetUrl);
+        if (apiBases.Count > 0)
+        {
+            findings.Add(Finding(AuthCheckDef, tools, "Info", "auth.surface.api_discovered",
+                P(("observed", $"Discovered {apiBases.Count} post-login API/base URL(s): {string.Join(", ", apiBases)}."),
+                    ("impact", "Authenticated scanning should include these hosts, not only the public landing page.")),
+                string.Join("; ", apiBases)));
+        }
+        else
+        {
+            findings.Add(Finding(AuthCheckDef, tools, "Low", "auth.surface.api_none",
+                P(("observed", "No GraphQL/API base URL was discovered from the authenticated session."),
+                    ("impact", "Post-login API coverage may be incomplete for SPA apps.")),
+                $"target={targetUrl}"));
+        }
+
+        using var anonHandler = CreateScanHandler();
+        using var anonClient = CreateScanClient(anonHandler);
+
+        findings.AddRange(await DiffAuthzPathsAsync(anonClient, authClient, targetUrl, cancellationToken));
+
+        foreach (var api in apiBases.Where(u => u.Contains("graphql", StringComparison.OrdinalIgnoreCase)).Take(3))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            findings.AddRange(await DiffGraphqlAccessAsync(anonClient, authClient, api, cancellationToken));
+        }
+
+        if (!findings.Any(f => f.Code.StartsWith("auth.surface.authz_diff", StringComparison.OrdinalIgnoreCase)
+                               || f.Code.StartsWith("auth.surface.graphql", StringComparison.OrdinalIgnoreCase)))
+        {
+            findings.Add(Finding(AuthCheckDef, tools, "Info", "auth.coverage.limited",
+                P(("observed", "Login succeeded but no clear anonymous-vs-auth response differences were found on the probed paths."),
+                    ("impact", "The app may be a SPA that serves the same shell publicly; API-level authz tests are still required.")),
+                $"target={targetUrl}; apis={apiBases.Count}"));
+        }
+
+        return findings;
+    }
+
+    private static IEnumerable<ScanFindingDto> EvaluateSessionCookies(HttpClientHandler handler, string targetUrl)
+    {
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var targetUri))
+            yield break;
+
+        var hosts = new HashSet<Uri>(new UriHostComparer()) { targetUri };
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            try
+            {
+                var scheme = targetUri.Scheme;
+                var host = cookie.Domain.TrimStart('.');
+                hosts.Add(new Uri($"{scheme}://{host}/"));
+            }
+            catch
+            {
+                // ignore malformed cookie domains
+            }
+        }
+
+        var sessionCookies = new List<Cookie>();
+        foreach (var host in hosts)
+        {
+            try
+            {
+                sessionCookies.AddRange(handler.CookieContainer.GetCookies(host).Cast<Cookie>());
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        sessionCookies = sessionCookies
+            .GroupBy(c => $"{c.Domain}|{c.Name}", StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+        if (sessionCookies.Count == 0)
+        {
+            yield return Finding(AuthCheckDef, AuthCheckDef.Tools, "Medium", "auth.session.cookie_missing",
+                P(("observed", "Authenticated session established but no cookies were present in the scanner jar."),
+                    ("impact", "Session may rely only on bearer tokens in memory/localStorage — cookie-based authz probes may be incomplete."),
+                    ("targetUrl", targetUrl)),
+                "cookies=0");
+            yield break;
+        }
+
+        var insecure = sessionCookies.Where(c => !c.Secure).Select(c => c.Name).Distinct().ToList();
+        var noHttpOnly = sessionCookies.Where(c => !c.HttpOnly).Select(c => c.Name).Distinct().ToList();
+
+        if (insecure.Count > 0)
+        {
+            yield return Finding(AuthCheckDef, AuthCheckDef.Tools, "High", "auth.session.cookie_insecure",
+                P(("observed", $"Session cookie(s) without Secure: {string.Join(", ", insecure)}."),
+                    ("impact", "Session cookies can be sent over HTTP if a downgrade occurs."),
+                    ("targetUrl", targetUrl)),
+                $"missing_secure={string.Join(",", insecure)}");
+        }
+
+        if (noHttpOnly.Count > 0)
+        {
+            yield return Finding(AuthCheckDef, AuthCheckDef.Tools, "Medium", "auth.session.cookie_no_httponly",
+                P(("observed", $"Session cookie(s) without HttpOnly: {string.Join(", ", noHttpOnly)}."),
+                    ("impact", "XSS could steal session cookies readable by JavaScript."),
+                    ("targetUrl", targetUrl)),
+                $"missing_httponly={string.Join(",", noHttpOnly)}");
+        }
+
+        if (insecure.Count == 0 && noHttpOnly.Count == 0)
+        {
+            yield return Finding(AuthCheckDef, AuthCheckDef.Tools, "Info", "auth.session.cookie_ok",
+                P(("observed", $"Authenticated cookie jar has {sessionCookies.Count} cookie(s) with Secure+HttpOnly."),
+                    ("targetUrl", targetUrl)),
+                $"cookies={sessionCookies.Count}");
+        }
+    }
+
+    private static List<string> DiscoverAuthenticatedApiBases(HttpClientHandler handler, string targetUrl)
+    {
+        var bases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var target))
+            return [];
+
+        // Sibling Clever-style hosts commonly used after OIDC login.
+        if (target.Host.Contains("intro.", StringComparison.OrdinalIgnoreCase))
+        {
+            var graphHost = target.Host.Replace("intro.", "cvgraph2.", StringComparison.OrdinalIgnoreCase);
+            bases.Add($"{target.Scheme}://{graphHost}/graphql");
+        }
+
+        if (target.Host.Contains("cvmanager.", StringComparison.OrdinalIgnoreCase))
+        {
+            var backend = target.Host.Replace("cvmanager.", "cvmanager-backend.", StringComparison.OrdinalIgnoreCase);
+            bases.Add($"{target.Scheme}://{backend}/graphql");
+        }
+
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            var host = cookie.Domain.TrimStart('.');
+            if (host.Contains("graph", StringComparison.OrdinalIgnoreCase)
+                || host.Contains("api", StringComparison.OrdinalIgnoreCase)
+                || host.Contains("backend", StringComparison.OrdinalIgnoreCase))
+            {
+                bases.Add($"{target.Scheme}://{host}/graphql");
+                bases.Add($"{target.Scheme}://{host}/api");
+            }
+        }
+
+        return bases.Take(8).ToList();
+    }
+
+    private async Task<IReadOnlyList<ScanFindingDto>> DiffAuthzPathsAsync(
+        HttpClient anonClient,
+        HttpClient authClient,
+        string targetUrl,
+        CancellationToken cancellationToken)
+    {
+        var findings = new List<ScanFindingDto>();
+        var baseUri = new Uri(targetUrl.TrimEnd('/') + "/");
+        var paths = new[]
+        {
+            "dashboard", "general/dashboard", "app", "home", "profile", "settings",
+            "account", "admin", "api", "me", "user", "patients", "chart"
+        };
+
+        var diffs = new List<string>();
+        foreach (var path in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var url = new Uri(baseUri, path).ToString();
+            var anon = await ProbeUrlAsync(anonClient, url, cancellationToken);
+            var auth = await ProbeUrlAsync(authClient, url, cancellationToken);
+            if (anon is null || auth is null) continue;
+
+            var anonBlocked = anon.StatusCode is 401 or 403
+                              || (anon.StatusCode is >= 300 and < 400)
+                              || LooksLikeLoginPage(anon.BodySample);
+            var authOk = auth.StatusCode is >= 200 and < 300;
+
+            // Meaningful unlock: anonymous blocked / login-like, authenticated gets 2xx with different body.
+            if (anonBlocked && authOk
+                && anon.BodyFingerprint != auth.BodyFingerprint
+                && !IsSoft404OrSpaFallback(auth, anon, path, allowHtml: true))
+            {
+                diffs.Add($"{path}: anon={anon.StatusCode} -> auth={auth.StatusCode}");
+            }
+            else if (anon.StatusCode is >= 400 && auth.StatusCode is >= 200 and < 300
+                     && anon.BodyFingerprint != auth.BodyFingerprint)
+            {
+                diffs.Add($"{path}: anon={anon.StatusCode} -> auth={auth.StatusCode}");
+            }
+        }
+
+        if (diffs.Count > 0)
+        {
+            findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "Medium", "auth.surface.authz_diff",
+                P(("observed", $"Paths behave differently with an authenticated session: {string.Join("; ", diffs)}."),
+                    ("impact", "These routes are gated by login; verify authorization (role/tenant) still restricts sensitive data."),
+                    ("targetUrl", targetUrl)),
+                string.Join("; ", diffs)));
+        }
+
+        return findings;
+    }
+
+    private static async Task<IReadOnlyList<ScanFindingDto>> DiffGraphqlAccessAsync(
+        HttpClient anonClient,
+        HttpClient authClient,
+        string graphqlUrl,
+        CancellationToken cancellationToken)
+    {
+        var findings = new List<ScanFindingDto>();
+        const string probeQuery = """{"query":"{ __typename }"}""";
+
+        async Task<(int Status, string Body)> PostAsync(HttpClient client)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, graphqlUrl)
+            {
+                Content = new StringContent(probeQuery, Encoding.UTF8, "application/json")
+            };
+            using var resp = await client.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            return ((int)resp.StatusCode, body.Length > 400 ? body[..400] : body);
+        }
+
+        try
+        {
+            var anon = await PostAsync(anonClient);
+            var auth = await PostAsync(authClient);
+
+            var anonDenied = anon.Status is 401 or 403
+                             || anon.Body.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
+                             || anon.Body.Contains("AUTH", StringComparison.OrdinalIgnoreCase);
+            var authAccepted = auth.Status is >= 200 and < 300
+                               && (auth.Body.Contains("__typename", StringComparison.OrdinalIgnoreCase)
+                                   || auth.Body.Contains("\"data\"", StringComparison.OrdinalIgnoreCase));
+
+            if (anonDenied && authAccepted)
+            {
+                findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "Medium", "auth.surface.graphql_authz",
+                    P(("observed", $"GraphQL {graphqlUrl}: anonymous HTTP {anon.Status}, authenticated HTTP {auth.Status} with data."),
+                        ("impact", "API accepts the session; continue with authenticated GraphQL security tests (introspection, IDOR, mutations)."),
+                        ("url", graphqlUrl)),
+                    $"anon={anon.Status}; auth={auth.Status}"));
+            }
+            else if (authAccepted && anon.Status is >= 200 and < 300
+                     && anon.Body.Contains("\"data\"", StringComparison.OrdinalIgnoreCase))
+            {
+                findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "High", "auth.surface.graphql_public",
+                    P(("observed", $"GraphQL {graphqlUrl} answered both anonymously and with a session (HTTP {anon.Status}/{auth.Status})."),
+                        ("impact", "GraphQL may be reachable without authentication — verify resolvers enforce authz."),
+                        ("url", graphqlUrl)),
+                    $"anon={anon.Status}; auth={auth.Status}"));
+            }
+            else if (authAccepted)
+            {
+                findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "Info", "auth.surface.graphql_ok",
+                    P(("observed", $"Authenticated GraphQL probe succeeded at {graphqlUrl} (HTTP {auth.Status})."),
+                        ("url", graphqlUrl)),
+                    $"auth={auth.Status}"));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "Info", "auth.surface.graphql_error",
+                P(("observed", $"GraphQL probe error for {graphqlUrl} (details redacted)."),
+                    ("url", graphqlUrl)),
+                "probe=error"));
+        }
+
+        return findings;
+    }
+
+    private sealed class UriHostComparer : IEqualityComparer<Uri>
+    {
+        public bool Equals(Uri? x, Uri? y) =>
+            string.Equals(x?.Authority, y?.Authority, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode(Uri obj) =>
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Authority);
     }
 
     private async Task<AuthAttemptResult> TryAuthenticateAsync(

@@ -58,6 +58,19 @@ public static class ScanI18n
             "auth.ok" => ("Authenticated session established", "Observed: {observed}\nAuth type: {authType}.", "Rotate scan credentials regularly and use least-privilege accounts.", ["Open {loginUrl}", "Sign in as the scan user.", "Confirm the post-login URL or session cookie."]),
             "auth.failed" => ("Authentication failed", "Observed: {observed}\nImpact: {impact}", "Verify login URL, credentials, CSRF handling, and success marker; authenticated checks were skipped or limited.", ["Open {loginUrl}", "Attempt the same credentials manually.", "Adjust loginUrl / successUrlContains and rescan."]),
             "auth.skipped" => ("Authenticated scan not requested", "This scan ran anonymously.", "Enable form or basic auth to cover post-login areas.", null),
+            "auth.coverage.skipped" => ("Authenticated surface skipped", "Observed: {observed}\nImpact: {impact}", "Fix login first, then rescan to cover post-login APIs and authz diffs.", null),
+            "auth.coverage.limited" => ("Limited post-login coverage signal", "Observed: {observed}\nImpact: {impact}", "Add API/GraphQL targets or authenticated crawlers for SPA backends.", null),
+            "auth.session.cookie_missing" => ("No session cookies in jar", "Observed: {observed}\nImpact: {impact}", "Confirm whether auth uses HttpOnly cookies or bearer tokens in storage.", ["Sign in manually", "Inspect Application → Cookies / Local Storage"]),
+            "auth.session.cookie_insecure" => ("Session cookie missing Secure", "Observed: {observed}\nImpact: {impact}", "Set Secure on all authentication/session cookies.", ["Inspect Set-Cookie after login", "Confirm Secure flag in DevTools"]),
+            "auth.session.cookie_no_httponly" => ("Session cookie missing HttpOnly", "Observed: {observed}\nImpact: {impact}", "Set HttpOnly on cookies that JavaScript must not read.", ["Inspect Set-Cookie after login", "Confirm HttpOnly flag in DevTools"]),
+            "auth.session.cookie_ok" => ("Session cookies look hardened", "Observed: {observed}", "Keep Secure+HttpOnly and review SameSite separately.", null),
+            "auth.surface.api_discovered" => ("Post-login API bases discovered", "Observed: {observed}\nImpact: {impact}", "Include discovered API hosts in authenticated testing and monitoring.", null),
+            "auth.surface.api_none" => ("No post-login API base discovered", "Observed: {observed}\nImpact: {impact}", "Configure known GraphQL/REST bases for authenticated scans.", null),
+            "auth.surface.authz_diff" => ("Anonymous vs authenticated path difference", "Observed: {observed}\nImpact: {impact}", "Verify role/tenant authorization on unlocked routes; do not rely on obscurity.", ["Open {targetUrl}", "Compare the same paths logged out vs logged in"]),
+            "auth.surface.graphql_authz" => ("GraphQL accepts authenticated session", "Observed: {observed}\nImpact: {impact}", "Run authenticated GraphQL tests (introspection, IDOR, dangerous mutations).", ["POST {url} with and without session", "Confirm anonymous access is denied"]),
+            "auth.surface.graphql_public" => ("GraphQL reachable anonymously", "Observed: {observed}\nImpact: {impact}", "Enforce authentication on GraphQL and authorize every resolver.", ["POST {url} without credentials", "Confirm sensitive fields are not public"]),
+            "auth.surface.graphql_ok" => ("Authenticated GraphQL probe succeeded", "Observed: {observed}", "Continue deeper GraphQL security testing.", null),
+            "auth.surface.graphql_error" => ("GraphQL probe error", "Observed: {observed}", "Verify endpoint availability and CORS for scanner traffic.", null),
             _ => (code, "{observed}", "", null)
         };
         var (title, detail, recommendation, steps) = template;
@@ -143,6 +156,19 @@ public static class ScanI18n
             "auth.ok" => ("Đã thiết lập phiên đăng nhập", "Quan sát: {observed}\nLoại auth: {authType}.", "Xoay vòng credential scan định kỳ và dùng tài khoản least-privilege.", ["Mở {loginUrl}", "Đăng nhập bằng user scan.", "Xác nhận URL sau login hoặc session cookie."]),
             "auth.failed" => ("Đăng nhập thất bại", "Quan sát: {observed}\nTác động: {impact}", "Kiểm tra login URL, credential, CSRF và success marker; các check sau login bị bỏ qua hoặc hạn chế.", ["Mở {loginUrl}", "Thử đăng nhập thủ công cùng credential.", "Chỉnh loginUrl / successUrlContains rồi scan lại."]),
             "auth.skipped" => ("Không bật authenticated scan", "Scan chạy ẩn danh.", "Bật form hoặc basic auth để phủ khu vực sau login.", null),
+            "auth.coverage.skipped" => ("Bỏ qua bề mặt sau login", "Quan sát: {observed}\nTác động: {impact}", "Sửa đăng nhập rồi scan lại để phủ API và authz sau login.", null),
+            "auth.coverage.limited" => ("Tín hiệu phủ sau login còn hạn chế", "Quan sát: {observed}\nTác động: {impact}", "Bổ sung target API/GraphQL hoặc crawler authenticated cho SPA.", null),
+            "auth.session.cookie_missing" => ("Không thấy session cookie", "Quan sát: {observed}\nTác động: {impact}", "Xác nhận auth dùng HttpOnly cookie hay bearer token trong storage.", ["Đăng nhập thủ công", "Kiểm tra Cookies / Local Storage"]),
+            "auth.session.cookie_insecure" => ("Session cookie thiếu Secure", "Quan sát: {observed}\nTác động: {impact}", "Bật Secure cho mọi cookie xác thực/phiên.", ["Xem Set-Cookie sau login", "Xác nhận cờ Secure trong DevTools"]),
+            "auth.session.cookie_no_httponly" => ("Session cookie thiếu HttpOnly", "Quan sát: {observed}\nTác động: {impact}", "Bật HttpOnly cho cookie không cần JavaScript đọc.", ["Xem Set-Cookie sau login", "Xác nhận cờ HttpOnly trong DevTools"]),
+            "auth.session.cookie_ok" => ("Session cookie trông đã cứng hóa", "Quan sát: {observed}", "Giữ Secure+HttpOnly và rà SameSite riêng.", null),
+            "auth.surface.api_discovered" => ("Phát hiện API base sau login", "Quan sát: {observed}\nTác động: {impact}", "Đưa các host API này vào kiểm thử và giám sát authenticated.", null),
+            "auth.surface.api_none" => ("Không phát hiện API base sau login", "Quan sát: {observed}\nTác động: {impact}", "Cấu hình GraphQL/REST base đã biết cho authenticated scan.", null),
+            "auth.surface.authz_diff" => ("Khác biệt path ẩn danh vs đã login", "Quan sát: {observed}\nTác động: {impact}", "Xác minh phân quyền role/tenant trên route được mở sau login.", ["Mở {targetUrl}", "So sánh cùng path khi logout và login"]),
+            "auth.surface.graphql_authz" => ("GraphQL nhận phiên đã đăng nhập", "Quan sát: {observed}\nTác động: {impact}", "Tiếp tục test GraphQL authenticated (introspection, IDOR, mutation nguy hiểm).", ["POST {url} có/không session", "Xác nhận anonymous bị từ chối"]),
+            "auth.surface.graphql_public" => ("GraphQL truy cập được khi chưa login", "Quan sát: {observed}\nTác động: {impact}", "Bắt buộc authentication trên GraphQL và authorize từng resolver.", ["POST {url} không credential", "Xác nhận field nhạy cảm không public"]),
+            "auth.surface.graphql_ok" => ("Probe GraphQL authenticated thành công", "Quan sát: {observed}", "Tiếp tục kiểm thử GraphQL sâu hơn.", null),
+            "auth.surface.graphql_error" => ("Lỗi probe GraphQL", "Quan sát: {observed}", "Kiểm tra endpoint và CORS cho traffic scanner.", null),
             _ => (title, detail, recommendation, steps)
         };
 
