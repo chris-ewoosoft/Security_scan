@@ -450,8 +450,7 @@ public sealed class WebsiteScanProcessor(
         post.Content = new FormUrlEncodedContent(form.Fields);
         post.Headers.TryAddWithoutValidation("Referer", pageUrl);
         using var posted = await client.SendAsync(post, cancellationToken);
-        var finalUrl = posted.RequestMessage?.RequestUri?.ToString() ?? form.ActionUrl;
-        // After redirects, HttpClient leaves RequestMessage as original POST URL; check content for success markers.
+        var finalUrl = posted.RequestMessage?.RequestUri?.AbsoluteUri ?? form.ActionUrl;
         var body = await posted.Content.ReadAsStringAsync(cancellationToken);
         var codePost = (int)posted.StatusCode;
 
@@ -471,6 +470,15 @@ public sealed class WebsiteScanProcessor(
             return new AuthAttemptResult(false, pageUrl, $"Form login failed: {hint} flash={code}");
         }
 
+        // Clever/OIDC: credentials OK then auto-submit "Continue" confirm form.
+        var confirm = await TrySubmitOidcConfirmAsync(client, body, finalUrl, cancellationToken);
+        if (confirm is not null)
+        {
+            body = confirm.Body;
+            finalUrl = confirm.Url;
+            codePost = confirm.StatusCode;
+        }
+
         if (!string.IsNullOrWhiteSpace(auth.SuccessUrlContains)
             && (finalUrl.Contains(auth.SuccessUrlContains, StringComparison.OrdinalIgnoreCase)
                 || body.Contains(auth.SuccessUrlContains, StringComparison.OrdinalIgnoreCase)))
@@ -478,19 +486,19 @@ public sealed class WebsiteScanProcessor(
             return new AuthAttemptResult(true, pageUrl, $"Form login success marker matched ({auth.SuccessUrlContains}).");
         }
 
-        var stillOnLogin = finalUrl.Contains("/interaction/", StringComparison.OrdinalIgnoreCase)
-                           || finalUrl.Contains("login", StringComparison.OrdinalIgnoreCase)
+        var hasCredentialForm = Regex.IsMatch(body, "name=[\"']hospital[\"']|name=[\"']password[\"']", RegexOptions.IgnoreCase)
+                                && Regex.IsMatch(body, "<form\\b", RegexOptions.IgnoreCase);
+        var stillOnLogin = hasCredentialForm
                            || LooksLikeLoginPage(body)
-                           || body.Contains("wrongPassMsg", StringComparison.OrdinalIgnoreCase)
-                           || body.Contains("Incorrect information", StringComparison.OrdinalIgnoreCase);
+                           || body.Contains("wrongPassMsg", StringComparison.OrdinalIgnoreCase);
 
-        // OIDC success usually leaves interaction and lands on callback / app with 2xx.
         if (codePost is >= 200 and < 400 && !stillOnLogin)
-            return new AuthAttemptResult(true, pageUrl, $"Form login appears successful (HTTP {codePost}, url={finalUrl}).");
+            return new AuthAttemptResult(true, pageUrl, $"Form/OIDC login appears successful (HTTP {codePost}, url={finalUrl}).");
 
         if (codePost is >= 200 and < 400
             && (finalUrl.Contains("/auth/callback", StringComparison.OrdinalIgnoreCase)
                 || finalUrl.Contains("intro.", StringComparison.OrdinalIgnoreCase)
+                || finalUrl.Contains("cvgraph", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("access_token", StringComparison.OrdinalIgnoreCase)))
         {
             return new AuthAttemptResult(true, pageUrl, $"Form/OIDC login completed (HTTP {codePost}, url={finalUrl}).");
@@ -504,6 +512,37 @@ public sealed class WebsiteScanProcessor(
 
         return new AuthAttemptResult(false, pageUrl, $"Form login inconclusive (HTTP {codePost}, url={finalUrl}).");
     }
+
+    private static async Task<OidcHopResult?> TrySubmitOidcConfirmAsync(
+        HttpClient client,
+        string html,
+        string currentUrl,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        if (Regex.IsMatch(html, "name=[\"']password[\"']", RegexOptions.IgnoreCase))
+            return null;
+
+        var actionMatch = Regex.Match(html, "action\\s*=\\s*[\"']([^\"']*/confirm)[\"']", RegexOptions.IgnoreCase);
+        if (!actionMatch.Success) return null;
+
+        var action = System.Net.WebUtility.HtmlDecode(actionMatch.Groups[1].Value.Trim());
+        if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var baseUri))
+            baseUri = new Uri("https://cvauth.vnm2.vnclever.com/");
+        var actionUrl = Uri.TryCreate(baseUri, action, out var abs) ? abs.ToString() : action;
+
+        using var confirmPost = new HttpRequestMessage(HttpMethod.Post, actionUrl)
+        {
+            Content = new FormUrlEncodedContent(Array.Empty<KeyValuePair<string, string>>())
+        };
+        confirmPost.Headers.TryAddWithoutValidation("Referer", currentUrl);
+        using var resp = await client.SendAsync(confirmPost, cancellationToken);
+        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+        var url = resp.RequestMessage?.RequestUri?.AbsoluteUri ?? actionUrl;
+        return new OidcHopResult(body, url, (int)resp.StatusCode);
+    }
+
+    private sealed record OidcHopResult(string Body, string Url, int StatusCode);
 
     private static IReadOnlyList<string> DiscoverOidcLoginUrls(string targetUrl, string html)
     {
