@@ -85,5 +85,6 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="9.0.7" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageVersion Include="CsvHelper" Version="33.0.1" />
+    <PackageVersion Include="LibGit2Sharp" Version="0.31.0" />
   </ItemGroup>
 </Project>

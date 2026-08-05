@@ -26,9 +26,6 @@ ARG BUILD_CONFIGURATION=Release
 RUN dotnet publish "SecurityPortal.API.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 FROM base AS final
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "SecurityPortal.API.dll"]

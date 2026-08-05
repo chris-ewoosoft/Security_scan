@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "B3ICz15jHok=",
+  "dgSpecHash": "j2RaOPhLzwU=",
   "success": true,
   "projectFilePath": "D:\\Security Portal\\src\\services\\SecurityPortal.API\\SecurityPortal.API.csproj",
   "expectedPackageFiles": [
@@ -19,6 +19,8 @@
     "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\communitytoolkit.highperformance\\8.3.0\\communitytoolkit.highperformance.8.3.0.nupkg.sha512",
     "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\fluentvalidation\\11.11.0\\fluentvalidation.11.11.0.nupkg.sha512",
     "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\fluentvalidation.dependencyinjectionextensions\\11.11.0\\fluentvalidation.dependencyinjectionextensions.11.11.0.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\libgit2sharp\\0.31.0\\libgit2sharp.0.31.0.nupkg.sha512",
+    "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\libgit2sharp.nativebinaries\\2.0.323\\libgit2sharp.nativebinaries.2.0.323.nupkg.sha512",
     "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\masstransit\\8.3.6\\masstransit.8.3.6.nupkg.sha512",
     "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\masstransit.abstractions\\8.3.6\\masstransit.abstractions.8.3.6.nupkg.sha512",
     "C:\\Users\\Chris\\AppData\\Local\\Temp\\cursor-sandbox-cache\\f60c8f4f94b9e6a5cdb2cf5e6be5400b\\nuget\\masstransit.entityframeworkcore\\8.3.6\\masstransit.entityframeworkcore.8.3.6.nupkg.sha512",

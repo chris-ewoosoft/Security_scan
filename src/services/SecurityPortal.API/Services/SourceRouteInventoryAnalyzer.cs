@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LibGit2Sharp;
 using SecurityPortal.Application.Common.Interfaces;
 using SecurityPortal.Application.Features.Scans.DTOs;
 using SecurityPortal.Domain.Entities;
@@ -204,80 +204,60 @@ public static partial class SourceRouteInventoryAnalyzer
         if (Directory.Exists(cloneDir))
             Directory.Delete(cloneDir, true);
 
-        // Never put the PAT into the clone URL — git stderr often echoes that URL on failure.
         var cleanUrl = StripUserInfo(repositoryUrl);
-        var args = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(token))
-        {
-            var basic = Convert.ToBase64String(
-                Encoding.UTF8.GetBytes(BuildBasicAuthUserInfo(cleanUrl, token)));
-            args.Append("-c ").Append(Quote($"http.extraHeader=AUTHORIZATION: basic {basic}")).Append(' ');
-        }
 
-        args.Append("clone --depth 1 --single-branch");
-        if (!string.IsNullOrWhiteSpace(branch))
-            args.Append(" --branch ").Append(Quote(branch));
-        args.Append(' ').Append(Quote(cleanUrl)).Append(' ').Append(Quote(cloneDir));
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = "git",
-            Arguments = args.ToString(),
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        psi.Environment["GIT_ASKPASS"] = "echo";
-        psi.Environment["GCM_INTERACTIVE"] = "never";
-
-        using var process = new Process { StartInfo = psi };
         try
         {
-            if (!process.Start())
-                return new CloneOutcome(false, "Failed to start git process.", null);
-        }
-        catch (Exception ex)
-        {
-            return new CloneOutcome(false, ScanSecretSanitizer.Sanitize($"git is not available: {ex.Message}", token), null);
-        }
+            return await Task.Run(() =>
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(CloneTimeoutSeconds));
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(CloneTimeoutSeconds));
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token);
+                var options = new CloneOptions { Checkout = true };
+                options.FetchOptions.Depth = 1;
+
+                if (!string.IsNullOrWhiteSpace(branch))
+                    options.BranchName = branch.Trim();
+
+                if (!string.IsNullOrWhiteSpace(token))
+                {
+                    var user = BuildCredentialUsername(cleanUrl);
+                    options.FetchOptions.CredentialsProvider = (_, _, _) =>
+                        new UsernamePasswordCredentials { Username = user, Password = token };
+                }
+
+                timeoutCts.Token.ThrowIfCancellationRequested();
+                Repository.Clone(cleanUrl, cloneDir, options);
+
+                using var repo = new Repository(cloneDir);
+                var sha = repo.Head.Tip?.Sha;
+                var shortSha = sha is { Length: >= 7 } ? sha[..7] : sha;
+                return new CloneOutcome(true, "ok", shortSha);
+            }, cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            TryDelete(cloneDir);
             return new CloneOutcome(false, $"Clone timed out after {CloneTimeoutSeconds}s.", null);
         }
-
-        var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
-        if (process.ExitCode != 0)
+        catch (Exception ex)
         {
-            var msg = string.IsNullOrWhiteSpace(stderr) ? $"git exit {process.ExitCode}" : stderr.Trim();
-            return new CloneOutcome(false, ScanSecretSanitizer.Sanitize(msg, token), null);
+            TryDelete(cloneDir);
+            return new CloneOutcome(false, ScanSecretSanitizer.Sanitize(ex.Message, token), null);
         }
-
-        var commit = await ReadCommitAsync(cloneDir, cancellationToken);
-        return new CloneOutcome(true, "ok", commit);
     }
 
-    private static string BuildBasicAuthUserInfo(string repositoryUrl, string token)
+    private static string BuildCredentialUsername(string repositoryUrl)
     {
         var host = Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var uri)
             ? uri.Host
             : "";
         if (host.Contains("gitlab", StringComparison.OrdinalIgnoreCase))
-            return $"oauth2:{token}";
+            return "oauth2";
         if (host.Contains("dev.azure.com", StringComparison.OrdinalIgnoreCase)
             || host.Contains("visualstudio.com", StringComparison.OrdinalIgnoreCase))
-            return $":{token}";
-        // GitHub and most forges accept x-access-token
-        return $"x-access-token:{token}";
+            return "pat";
+        return "x-access-token";
     }
 
     private static string StripUserInfo(string repositoryUrl)
@@ -290,29 +270,35 @@ public static partial class SourceRouteInventoryAnalyzer
         return cleaned.Replace("://@", "://", StringComparison.Ordinal);
     }
 
-    private static async Task<string?> ReadCommitAsync(string cloneDir, CancellationToken cancellationToken)
+    private static IEnumerable<string> EnumerateCodeFiles(string root)
     {
-        try
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
         {
-            var psi = new ProcessStartInfo
+            var dir = stack.Pop();
+            IEnumerable<string> subdirs;
+            try { subdirs = Directory.EnumerateDirectories(dir); }
+            catch { continue; }
+
+            foreach (var sub in subdirs)
             {
-                FileName = "git",
-                Arguments = "rev-parse --short HEAD",
-                WorkingDirectory = cloneDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            using var process = Process.Start(psi);
-            if (process is null) return null;
-            var output = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
-            await process.WaitForExitAsync(cancellationToken);
-            return process.ExitCode == 0 ? output : null;
-        }
-        catch
-        {
-            return null;
+                var name = Path.GetFileName(sub);
+                if (SkipDirNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                    continue;
+                stack.Push(sub);
+            }
+
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir); }
+            catch { continue; }
+
+            foreach (var file in files)
+            {
+                var ext = Path.GetExtension(file);
+                if (CodeExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase))
+                    yield return file;
+            }
         }
     }
 
@@ -469,38 +455,6 @@ public static partial class SourceRouteInventoryAnalyzer
         return TenantGuardRegex().IsMatch(window);
     }
 
-    private static IEnumerable<string> EnumerateCodeFiles(string root)
-    {
-        var stack = new Stack<string>();
-        stack.Push(root);
-        while (stack.Count > 0)
-        {
-            var dir = stack.Pop();
-            IEnumerable<string> subdirs;
-            try { subdirs = Directory.EnumerateDirectories(dir); }
-            catch { continue; }
-
-            foreach (var sub in subdirs)
-            {
-                var name = Path.GetFileName(sub);
-                if (SkipDirNames.Contains(name, StringComparer.OrdinalIgnoreCase))
-                    continue;
-                stack.Push(sub);
-            }
-
-            IEnumerable<string> files;
-            try { files = Directory.EnumerateFiles(dir); }
-            catch { continue; }
-
-            foreach (var file in files)
-            {
-                var ext = Path.GetExtension(file);
-                if (CodeExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase))
-                    yield return file;
-            }
-        }
-    }
-
     private static string NormalizeProbePath(RouteHit route)
     {
         var path = route.Path.Trim();
@@ -546,9 +500,6 @@ public static partial class SourceRouteInventoryAnalyzer
         rest = rest.Replace("[", "{").Replace("]", "}");
         return "/api/" + rest.Trim('/');
     }
-
-    private static string Quote(string value) =>
-        "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
     private static string MaskRepo(string? url)
     {

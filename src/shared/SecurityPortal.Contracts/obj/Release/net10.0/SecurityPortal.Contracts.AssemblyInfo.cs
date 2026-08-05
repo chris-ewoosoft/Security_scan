@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyCopyrightAttribute("Copyright © SecurityPortal 2024")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c6c81b9bfd265d4a36761e86841ad8bde045f8de")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+317d870ec01b51081281b2595c5792ff8ff121c8")]
 [assembly: System.Reflection.AssemblyProductAttribute("SecurityPortal.Contracts")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SecurityPortal.Contracts")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
