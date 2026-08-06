@@ -125,7 +125,15 @@ public sealed class WebsiteScanProcessor(
                 var fresh = await scans.GetByIdAsync(scan.Id, stoppingToken);
                 if (fresh is not null && fresh.Status == ScanStatus.Running)
                 {
-                    fresh.MarkFailed(ScanSecretSanitizer.Sanitize(ex.Message));
+                    // Include type + top stack frame so UI/local debugging is actionable
+                    // (e.g. MaxAutomaticRedirections=0 throws ArgumentOutOfRangeException).
+                    var top = ex.StackTrace?
+                        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .FirstOrDefault() ?? "";
+                    var detail = string.IsNullOrWhiteSpace(top)
+                        ? $"{ex.GetType().Name}: {ex.Message}"
+                        : $"{ex.GetType().Name}: {ex.Message} | {top}";
+                    fresh.MarkFailed(ScanSecretSanitizer.Sanitize(detail));
                     await unitOfWork.SaveChangesAsync(stoppingToken);
                 }
             }
@@ -144,17 +152,22 @@ public sealed class WebsiteScanProcessor(
         return current?.Status == ScanStatus.Cancelled;
     }
 
-    private static HttpClientHandler CreateScanHandler() => new()
+    private static HttpClientHandler CreateScanHandler()
     {
-        AllowAutoRedirect = true,
-        // Must be >= 1: MaxAutomaticRedirections=0 throws ArgumentOutOfRangeException
-        // ("value ('0') must be a non-negative and non-zero value").
-        MaxAutomaticRedirections = 12,
-        UseCookies = true,
-        CookieContainer = new System.Net.CookieContainer(),
-        AutomaticDecompression = System.Net.DecompressionMethods.All,
-        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-    };
+        // Never assign MaxAutomaticRedirections=0 — SocketsHttpHandler throws:
+        // ArgumentOutOfRangeException: value ('0') must be a non-negative and non-zero value.
+        const int redirects = 12;
+        var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = true,
+            UseCookies = true,
+            CookieContainer = new CookieContainer(),
+            AutomaticDecompression = DecompressionMethods.All,
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        };
+        handler.MaxAutomaticRedirections = redirects < 1 ? 1 : redirects;
+        return handler;
+    }
 
     private static HttpClient CreateScanClient(HttpClientHandler handler)
     {
