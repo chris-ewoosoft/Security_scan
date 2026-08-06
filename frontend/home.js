@@ -14,6 +14,50 @@
   const HistoryPanel = window.SecurityPortalHistory;
   const I18n = window.SecurityPortalI18n;
   const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
+  const EXPECTED_BUILD_STAMP = "2026-08-06.4";
+  let apiBuildStamp = null;
+
+  async function refreshApiBuildStamp() {
+    const footer = document.getElementById("api-build-footer");
+    const stampEl = document.getElementById("api-build-stamp");
+    try {
+      const res = await apiFetch("/scans/build-info", { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      apiBuildStamp = data?.stamp || null;
+      if (stampEl) stampEl.textContent = apiBuildStamp || "—";
+      if (footer) footer.hidden = !apiBuildStamp;
+      if (apiBuildStamp && apiBuildStamp !== EXPECTED_BUILD_STAMP) {
+        console.warn("[SecurityPortal] API stamp mismatch", { actual: apiBuildStamp, expected: EXPECTED_BUILD_STAMP, fix: data?.fix });
+      }
+      return data;
+    } catch (err) {
+      if (stampEl) stampEl.textContent = "?";
+      if (footer) footer.hidden = false;
+      console.warn("[SecurityPortal] build-info unreachable", err);
+      return null;
+    }
+  }
+
+  function isZeroRedirectError(message) {
+    const m = String(message || "");
+    return m.includes("non-zero value") || m.includes("Actual value was 0") || m.includes("MaxAutomaticRedirections");
+  }
+
+  function formatScanFailureMessage(scan) {
+    const raw = scan?.errorMessage || scan?.summary || "";
+    if (scan?.status !== "Failed" || !raw) return raw;
+    const hints = [];
+    if (isZeroRedirectError(raw)) {
+      hints.push(t("home.zeroRedirectHint", { expected: EXPECTED_BUILD_STAMP }));
+    }
+    if (apiBuildStamp && apiBuildStamp !== EXPECTED_BUILD_STAMP) {
+      hints.push(t("home.staleApiHint", { actual: apiBuildStamp, expected: EXPECTED_BUILD_STAMP }));
+    } else if (!apiBuildStamp && isZeroRedirectError(raw)) {
+      hints.push(t("home.staleApiHint", { actual: "?", expected: EXPECTED_BUILD_STAMP }));
+    }
+    return hints.length ? `${raw}\n\n${hints.join("\n")}` : raw;
+  }
 
   I18n?.applyDom();
 
@@ -462,6 +506,7 @@
       openReportPanel(data);
       startPolling(data.id);
       setStopVisible(true);
+      refreshApiBuildStamp();
       // Prove UI is talking to a live API build that includes the cvmanager fix.
       apiFetch("/scans/build-info", { headers: { Accept: "application/json" } })
         .then((r) => r.ok ? r.json() : null)
@@ -806,7 +851,7 @@
     badge.textContent = scan.status === "pending" ? "Queued" : (scan.status || "Queued");
     badge.className = "badge " + statusClass(scan.status === "pending" ? "Queued" : scan.status);
     document.getElementById("status-summary").textContent =
-      wrapReportLines(scan.errorMessage || scan.summary || t("report.processing"), 110);
+      wrapReportLines(formatScanFailureMessage(scan) || scan.summary || t("report.processing"), 110);
     document.getElementById("metric-http").textContent = scan.httpStatusCode ?? "—";
     document.getElementById("metric-time").textContent =
       scan.responseTimeMs != null ? `${scan.responseTimeMs} ms` : "—";
@@ -937,6 +982,7 @@
   const initialView = params.get("view");
 
   loadCatalog().then(async () => {
+    refreshApiBuildStamp();
     if (initialView === "config") showRight("config");
     else if (initialView === "history") showRight("history");
     else if (initialView === "introduce") showRight("introduce");

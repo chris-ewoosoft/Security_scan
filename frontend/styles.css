@@ -1306,6 +1306,22 @@ body.page-config .topbar {
   color: var(--muted);
 }
 
+.api-build-footer {
+  position: fixed;
+  right: 12px;
+  bottom: 8px;
+  z-index: 20;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.api-build-footer code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .report-hero {
   display: flex;
   justify-content: space-between;

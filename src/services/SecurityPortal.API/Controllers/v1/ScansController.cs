@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SecurityPortal.API.Services;
 using SecurityPortal.Application.Features.Scans.Commands;
 using SecurityPortal.Application.Features.Scans.DTOs;
 using SecurityPortal.Application.Features.Scans.Queries;
@@ -18,8 +19,9 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     public IActionResult BuildInfo() => Ok(new
     {
         service = "SecurityPortal.API",
-        fix = "cvmanager-graphql-discovery; MaxAutomaticRedirections-default",
-        stamp = "2026-08-06.3",
+        fix = "cvmanager-graphql-discovery; explicit-MaxAutomaticRedirections-50",
+        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-06.4",
+        maxAutomaticRedirections = ScanHttpClientFactory.DefaultMaxAutomaticRedirections,
         utc = DateTime.UtcNow
     });
 

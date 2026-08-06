@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Prometheus;
 using SecurityPortal.API;
 using SecurityPortal.API.Middleware;
+using SecurityPortal.API.Services;
 using SecurityPortal.Application;
 using SecurityPortal.Infrastructure;
 using Serilog;
@@ -89,18 +90,21 @@ builder.Services.AddHttpClient("WebsiteScanner", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("SecurityPortal-Scanner/1.0");
-}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-{
-    AllowAutoRedirect = true,
-    // Default MaxAutomaticRedirections is 50; never set to 0.
-    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-});
+}).ConfigurePrimaryHttpMessageHandler(ScanHttpClientFactory.CreateHandler);
 
 builder.Services.AddSingleton<SecurityPortal.API.Services.ScanCancellationRegistry>();
 builder.Services.AddSingleton<SecurityPortal.Application.Common.Interfaces.IScanAbortSignal, SecurityPortal.API.Services.ScanAbortSignal>();
 builder.Services.AddHostedService<SecurityPortal.API.Services.WebsiteScanProcessor>();
 
+var buildStamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-06.4";
+builder.Logging.AddFilter("SecurityPortal.API", LogLevel.Information);
+
 var app = builder.Build();
+
+app.Logger.LogInformation(
+    "SecurityPortal.API starting buildStamp={BuildStamp} maxAutomaticRedirections={Redirects}",
+    buildStamp,
+    ScanHttpClientFactory.DefaultMaxAutomaticRedirections);
 
 // Ensure schema exists (no migrations checked in yet)
 using (var scope = app.Services.CreateScope())

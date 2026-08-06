@@ -149,31 +149,10 @@ public sealed class WebsiteScanProcessor(
         return current?.Status == ScanStatus.Cancelled;
     }
 
-    private static HttpClientHandler CreateScanHandler()
-    {
-        // Do NOT assign MaxAutomaticRedirections=0 — SocketsHttpHandler throws:
-        // ArgumentOutOfRangeException: value ('0') must be a non-negative and non-zero value.
-        // Leave the default (50). Only set a positive value if you must override.
-        return new HttpClientHandler
-        {
-            AllowAutoRedirect = true,
-            UseCookies = true,
-            CookieContainer = new CookieContainer(),
-            AutomaticDecompression = DecompressionMethods.All,
-            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-        };
-    }
+    private static HttpClientHandler CreateScanHandler() => ScanHttpClientFactory.CreateHandler();
 
-    private static HttpClient CreateScanClient(HttpClientHandler handler)
-    {
-        var client = new HttpClient(handler, disposeHandler: false)
-        {
-            Timeout = TimeSpan.FromSeconds(20)
-        };
-        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "SecurityPortal-Scanner/1.0");
-        client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-        return client;
-    }
+    private static HttpClient CreateScanClient(HttpClientHandler handler) =>
+        ScanHttpClientFactory.CreateClient(handler, disposeHandler: false);
 
     private async Task<AnalysisResult> AnalyzeAsync(
         HttpClientHandler handler,

@@ -4,6 +4,7 @@ EXPOSE 8080
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
+ARG BUILD_STAMP=dev
 WORKDIR /src
 
 COPY ["src/services/SecurityPortal.API/SecurityPortal.API.csproj", "src/services/SecurityPortal.API/"]
@@ -27,5 +28,7 @@ RUN dotnet publish "SecurityPortal.API.csproj" -c $BUILD_CONFIGURATION -o /app/p
 
 FROM base AS final
 WORKDIR /app
+ARG BUILD_STAMP=dev
+ENV SECURITYPORTAL_BUILD_STAMP=${BUILD_STAMP}
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "SecurityPortal.API.dll"]
