@@ -147,6 +147,8 @@ public sealed class WebsiteScanProcessor(
     private static HttpClientHandler CreateScanHandler() => new()
     {
         AllowAutoRedirect = true,
+        // Must be >= 1: MaxAutomaticRedirections=0 throws ArgumentOutOfRangeException
+        // ("value ('0') must be a non-negative and non-zero value").
         MaxAutomaticRedirections = 12,
         UseCookies = true,
         CookieContainer = new System.Net.CookieContainer(),
@@ -682,7 +684,23 @@ public sealed class WebsiteScanProcessor(
             }
 
             if (auth.Type.Equals(ScanAuthConfiguration.TypeGraphql, StringComparison.OrdinalIgnoreCase))
-                return await TryGraphqlAuthenticateAsync(client, auth, password, loginUrl, cancellationToken);
+            {
+                // LoginUrl may be the SPA /login page — resolve real GraphQL endpoints first.
+                var gqlTargets = await ResolveGraphqlLoginTargetsAsync(
+                    client, targetUrl, loginUrl, html: null, cancellationToken);
+                AuthAttemptResult? last = null;
+                foreach (var endpoint in gqlTargets)
+                {
+                    last = await TryGraphqlAuthenticateAsync(client, auth, password, endpoint, cancellationToken);
+                    if (last.Success)
+                        return last;
+                }
+
+                return last ?? new AuthAttemptResult(
+                    false,
+                    loginUrl,
+                    "GraphQL login failed: no usable /graphql endpoint discovered for this host.");
+            }
 
             // Form login
             using var getLogin = new HttpRequestMessage(HttpMethod.Get, loginUrl);
@@ -709,7 +727,8 @@ public sealed class WebsiteScanProcessor(
                     return oidcFailure;
                 }
 
-                var discovered = await DiscoverGraphqlEndpointsAsync(client, loginUrl, html, cancellationToken);
+                var discovered = await ResolveGraphqlLoginTargetsAsync(
+                    client, targetUrl, loginUrl, html, cancellationToken);
                 foreach (var endpoint in discovered)
                 {
                     var gql = await TryGraphqlAuthenticateAsync(client, auth, password, endpoint, cancellationToken);
@@ -731,7 +750,7 @@ public sealed class WebsiteScanProcessor(
                 return new AuthAttemptResult(
                     false,
                     loginUrl,
-                    $"Login page is a JavaScript SPA (no HTML form). {hint} For Clever Dent, use Form login with Clinic ID + User ID.");
+                    $"Login page is a JavaScript SPA (no HTML form). {hint} For Clever Manager, use GraphQL auth with …-backend…/graphql or Form auth (auto-discovers backend).");
             }
 
             return await TryFormLoginAtAsync(client, auth, password, loginUrl, cancellationToken, html);
@@ -903,7 +922,8 @@ public sealed class WebsiteScanProcessor(
 
         // Clever Dent pattern: graphql host without /graphql + /auth/login?returnTo=
         var gqlHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        CollectGraphqlUrls(html, gqlHosts);
+        CollectGraphqlUrls(html, targetUrl, gqlHosts);
+        AddHeuristicGraphqlEndpoints(targetUrl, gqlHosts);
         foreach (var gql in gqlHosts)
         {
             if (!Uri.TryCreate(gql, UriKind.Absolute, out var uri)) continue;
@@ -1007,6 +1027,66 @@ public sealed class WebsiteScanProcessor(
         return null;
     }
 
+    private async Task<IReadOnlyList<string>> ResolveGraphqlLoginTargetsAsync(
+        HttpClient client,
+        string targetUrl,
+        string pageOrLoginUrl,
+        string? html,
+        CancellationToken cancellationToken)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(pageOrLoginUrl)
+            && pageOrLoginUrl.Contains("/graphql", StringComparison.OrdinalIgnoreCase)
+            && Uri.TryCreate(pageOrLoginUrl, UriKind.Absolute, out _))
+        {
+            found.Add(pageOrLoginUrl.Trim());
+        }
+
+        AddHeuristicGraphqlEndpoints(targetUrl, found);
+        AddHeuristicGraphqlEndpoints(pageOrLoginUrl, found);
+
+        if (!string.IsNullOrWhiteSpace(html))
+        {
+            CollectGraphqlUrls(html, pageOrLoginUrl, found);
+            var fromPage = await DiscoverGraphqlEndpointsAsync(client, pageOrLoginUrl, html, cancellationToken);
+            foreach (var u in fromPage)
+                found.Add(u);
+        }
+        else
+        {
+            // Fetch SPA login page once so relative uri:'/graphql' and heuristics can resolve.
+            try
+            {
+                var pageUrl = string.IsNullOrWhiteSpace(pageOrLoginUrl) ? targetUrl : pageOrLoginUrl;
+                using var req = new HttpRequestMessage(HttpMethod.Get, pageUrl);
+                using var res = await client.SendAsync(req, cancellationToken);
+                if (res.IsSuccessStatusCode)
+                {
+                    var pageHtml = await res.Content.ReadAsStringAsync(cancellationToken);
+                    CollectGraphqlUrls(pageHtml, pageUrl, found);
+                    foreach (var u in await DiscoverGraphqlEndpointsAsync(client, pageUrl, pageHtml, cancellationToken))
+                        found.Add(u);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // heuristics still apply
+            }
+        }
+
+        return found
+            .Where(u => u.Contains("/graphql", StringComparison.OrdinalIgnoreCase))
+            .Where(u => !u.Contains("chrome.google.com", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("github.com", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(u => u.Contains("backend", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(u => u.Contains("manager", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(u => u.Length)
+            .Take(8)
+            .ToList();
+    }
+
     private async Task<IReadOnlyList<string>> DiscoverGraphqlEndpointsAsync(
         HttpClient client,
         string pageUrl,
@@ -1014,7 +1094,8 @@ public sealed class WebsiteScanProcessor(
         CancellationToken cancellationToken)
     {
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        CollectGraphqlUrls(html, found);
+        CollectGraphqlUrls(html, pageUrl, found);
+        AddHeuristicGraphqlEndpoints(pageUrl, found);
 
         var scriptSrcs = Regex.Matches(html, "src=[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase)
             .Select(m => m.Groups[1].Value)
@@ -1035,7 +1116,7 @@ public sealed class WebsiteScanProcessor(
                 using var res = await client.SendAsync(req, cancellationToken);
                 if (!res.IsSuccessStatusCode) continue;
                 var js = await res.Content.ReadAsStringAsync(cancellationToken);
-                CollectGraphqlUrls(js, found);
+                CollectGraphqlUrls(js, pageUrl, found);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1049,15 +1130,38 @@ public sealed class WebsiteScanProcessor(
             .Where(u => !u.Contains("chrome.google.com", StringComparison.OrdinalIgnoreCase)
                         && !u.Contains("github.com", StringComparison.OrdinalIgnoreCase)
                         && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(u => u.Contains("manager", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .OrderBy(u => u.Contains("backend", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(u => u.Contains("manager", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(u => u.Length)
-            .Take(5)
+            .Take(8)
             .ToList();
     }
 
-    private static void CollectGraphqlUrls(string text, HashSet<string> sink)
+    private static void AddHeuristicGraphqlEndpoints(string? anyUrl, HashSet<string> sink)
+    {
+        if (string.IsNullOrWhiteSpace(anyUrl) || !Uri.TryCreate(anyUrl, UriKind.Absolute, out var uri))
+            return;
+
+        sink.Add($"{uri.Scheme}://{uri.Authority}/graphql");
+
+        if (uri.Host.Contains("cvmanager.", StringComparison.OrdinalIgnoreCase)
+            && !uri.Host.Contains("cvmanager-backend.", StringComparison.OrdinalIgnoreCase))
+        {
+            var backend = uri.Host.Replace("cvmanager.", "cvmanager-backend.", StringComparison.OrdinalIgnoreCase);
+            sink.Add($"{uri.Scheme}://{backend}/graphql");
+        }
+
+        if (uri.Host.Contains("intro.", StringComparison.OrdinalIgnoreCase))
+        {
+            var graphHost = uri.Host.Replace("intro.", "cvgraph2.", StringComparison.OrdinalIgnoreCase);
+            sink.Add($"{uri.Scheme}://{graphHost}/graphql");
+        }
+    }
+
+    private static void CollectGraphqlUrls(string text, string baseUrl, HashSet<string> sink)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
+
         foreach (Match m in Regex.Matches(
                      text,
                      "https?://[a-zA-Z0-9._\\-:]+/[^\\s\"'<>]*graphql[^\\s\"'<>]*",
@@ -1067,7 +1171,26 @@ public sealed class WebsiteScanProcessor(
             if (Uri.TryCreate(url, UriKind.Absolute, out _))
                 sink.Add(url);
         }
+
+        // SPA Apollo-style relative: uri: '/graphql'
+        foreach (Match m in Regex.Matches(
+                     text,
+                     @"['""](/graphql[^'""\s]*)['""]",
+                     RegexOptions.IgnoreCase))
+        {
+            var path = m.Groups[1].Value;
+            if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var page)
+                && Uri.TryCreate(page, path, out var abs))
+            {
+                sink.Add(abs.ToString());
+            }
+
+            AddHeuristicGraphqlEndpoints(baseUrl, sink);
+        }
     }
+
+    private static void CollectGraphqlUrls(string text, HashSet<string> sink) =>
+        CollectGraphqlUrls(text, "https://localhost/", sink);
 
     private static string ResolveLoginUrl(string targetUrl, string? loginUrl)
     {

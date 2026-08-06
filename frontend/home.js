@@ -87,7 +87,7 @@
     const type = (authType?.value || "form").trim().toLowerCase();
     const loginUrl = (authLoginUrl?.value || "").trim();
     if (type === "graphql" && !loginUrl) {
-      throw new Error(t("auth.graphqlLoginRequired"));
+      // Processor discovers …/graphql from the target host (e.g. Clever Manager backend).
     }
     const payload = { type, username, password };
     if (loginUrl) payload.loginUrl = loginUrl;

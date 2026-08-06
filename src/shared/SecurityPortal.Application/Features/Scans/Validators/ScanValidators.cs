@@ -48,14 +48,8 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
             RuleFor(x => x.Auth!.LoginUrl!)
                 .MaximumLength(2048)
                 .Must(BeValidWebsiteUrl)
-                .When(x => !string.IsNullOrWhiteSpace(x.Auth!.LoginUrl)
-                           || x.Auth!.Type!.Equals("graphql", StringComparison.OrdinalIgnoreCase))
+                .When(x => !string.IsNullOrWhiteSpace(x.Auth!.LoginUrl))
                 .WithMessage("Enter a valid login / GraphQL URL.");
-
-            RuleFor(x => x.Auth!.LoginUrl)
-                .NotEmpty()
-                .When(x => x.Auth!.Type!.Equals("graphql", StringComparison.OrdinalIgnoreCase))
-                .WithMessage("GraphQL endpoint URL is required.");
         });
 
         When(x => x.Source is not null && !string.IsNullOrWhiteSpace(x.Source.RepositoryUrl), () =>

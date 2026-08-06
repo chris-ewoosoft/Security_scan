@@ -295,7 +295,10 @@ public sealed class ScanAuthConfiguration
             throw new DomainException("Password is required for authenticated scans.");
 
         if (type is TypeGraphql && string.IsNullOrWhiteSpace(LoginUrl))
-            throw new DomainException("GraphQL endpoint URL is required for graphql auth.");
+        {
+            // Allow SPA target URL; processor discovers …/graphql (e.g. cvmanager-backend).
+            LoginUrl = null;
+        }
 
         if (!string.IsNullOrWhiteSpace(LoginUrl))
         {
