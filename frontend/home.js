@@ -462,6 +462,14 @@
       openReportPanel(data);
       startPolling(data.id);
       setStopVisible(true);
+      // Prove UI is talking to a live API build that includes the cvmanager fix.
+      apiFetch("/scans/build-info", { headers: { Accept: "application/json" } })
+        .then((r) => r.ok ? r.json() : null)
+        .then((b) => {
+          if (b?.stamp) console.info("[SecurityPortal] API build", b.stamp, b.fix);
+          else console.warn("[SecurityPortal] API build-info missing — stale API binary?");
+        })
+        .catch(() => console.warn("[SecurityPortal] API build-info unreachable"));
 
       const historyNote = document.querySelector(".history-link-note a");
       if (historyNote) historyNote.href = `/?view=history`;

@@ -125,14 +125,11 @@ public sealed class WebsiteScanProcessor(
                 var fresh = await scans.GetByIdAsync(scan.Id, stoppingToken);
                 if (fresh is not null && fresh.Status == ScanStatus.Running)
                 {
-                    // Include type + top stack frame so UI/local debugging is actionable
-                    // (e.g. MaxAutomaticRedirections=0 throws ArgumentOutOfRangeException).
-                    var top = ex.StackTrace?
-                        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .FirstOrDefault() ?? "";
-                    var detail = string.IsNullOrWhiteSpace(top)
-                        ? $"{ex.GetType().Name}: {ex.Message}"
-                        : $"{ex.GetType().Name}: {ex.Message} | {top}";
+                    // Persist actionable diagnostics (DB column ~2000 chars).
+                    var detail = ex is ArgumentOutOfRangeException aro
+                        ? $"ArgumentOutOfRangeException param={aro.ParamName} actual={aro.ActualValue}. {aro}"
+                        : ex.ToString();
+                    if (detail.Length > 1900) detail = detail[..1900] + "…";
                     fresh.MarkFailed(ScanSecretSanitizer.Sanitize(detail));
                     await unitOfWork.SaveChangesAsync(stoppingToken);
                 }
@@ -154,10 +151,10 @@ public sealed class WebsiteScanProcessor(
 
     private static HttpClientHandler CreateScanHandler()
     {
-        // Never assign MaxAutomaticRedirections=0 — SocketsHttpHandler throws:
+        // Do NOT assign MaxAutomaticRedirections=0 — SocketsHttpHandler throws:
         // ArgumentOutOfRangeException: value ('0') must be a non-negative and non-zero value.
-        const int redirects = 12;
-        var handler = new HttpClientHandler
+        // Leave the default (50). Only set a positive value if you must override.
+        return new HttpClientHandler
         {
             AllowAutoRedirect = true,
             UseCookies = true,
@@ -165,8 +162,6 @@ public sealed class WebsiteScanProcessor(
             AutomaticDecompression = DecompressionMethods.All,
             ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
         };
-        handler.MaxAutomaticRedirections = redirects < 1 ? 1 : redirects;
-        return handler;
     }
 
     private static HttpClient CreateScanClient(HttpClientHandler handler)

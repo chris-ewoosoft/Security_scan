@@ -92,8 +92,7 @@ builder.Services.AddHttpClient("WebsiteScanner", client =>
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = true,
-    // Never set to 0 — HttpClientHandler rejects it with ArgumentOutOfRangeException.
-    MaxAutomaticRedirections = 5,
+    // Default MaxAutomaticRedirections is 50; never set to 0.
     ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
 });
 

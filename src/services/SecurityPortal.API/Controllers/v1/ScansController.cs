@@ -11,6 +11,18 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
 {
     private string? Language => Request.Headers.AcceptLanguage.FirstOrDefault()?.Split(',')[0].Trim();
 
+    /// <summary>Build stamp so local/UI can verify the running API binary</summary>
+    [AllowAnonymous]
+    [HttpGet("build-info")]
+    [ProducesResponseType(200)]
+    public IActionResult BuildInfo() => Ok(new
+    {
+        service = "SecurityPortal.API",
+        fix = "cvmanager-graphql-discovery; MaxAutomaticRedirections-default",
+        stamp = "2026-08-06.3",
+        utc = DateTime.UtcNow
+    });
+
     /// <summary>Catalog of security checks, tools, and report types</summary>
     [AllowAnonymous]
     [HttpGet("catalog")]
