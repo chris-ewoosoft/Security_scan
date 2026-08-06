@@ -1079,7 +1079,10 @@ public sealed class WebsiteScanProcessor(
             .Where(u => u.Contains("/graphql", StringComparison.OrdinalIgnoreCase))
             .Where(u => !u.Contains("chrome.google.com", StringComparison.OrdinalIgnoreCase)
                         && !u.Contains("github.com", StringComparison.OrdinalIgnoreCase)
-                        && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase))
+                        && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("npmjs.com", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("apollo.dev", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("apollostack.com", StringComparison.OrdinalIgnoreCase))
             .OrderBy(u => u.Contains("backend", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(u => u.Contains("manager", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(u => u.Length)
@@ -1129,7 +1132,10 @@ public sealed class WebsiteScanProcessor(
             .Where(u => u.Contains("/graphql", StringComparison.OrdinalIgnoreCase))
             .Where(u => !u.Contains("chrome.google.com", StringComparison.OrdinalIgnoreCase)
                         && !u.Contains("github.com", StringComparison.OrdinalIgnoreCase)
-                        && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase))
+                        && !u.Contains("mswjs.io", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("npmjs.com", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("apollo.dev", StringComparison.OrdinalIgnoreCase)
+                        && !u.Contains("apollostack.com", StringComparison.OrdinalIgnoreCase))
             .OrderBy(u => u.Contains("backend", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(u => u.Contains("manager", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(u => u.Length)
@@ -1164,29 +1170,62 @@ public sealed class WebsiteScanProcessor(
 
         foreach (Match m in Regex.Matches(
                      text,
-                     "https?://[a-zA-Z0-9._\\-:]+/[^\\s\"'<>]*graphql[^\\s\"'<>]*",
+                     @"https?://[a-zA-Z0-9][a-zA-Z0-9._\-]*(?:\.[a-zA-Z0-9._\-]+)+(?:\:\d+)?/(?:[a-zA-Z0-9._\-~/%]+/)*graphql[a-zA-Z0-9._\-~/%]*",
                      RegexOptions.IgnoreCase))
         {
-            var url = m.Value.TrimEnd('.', ',', ';', ')', ']');
-            if (Uri.TryCreate(url, UriKind.Absolute, out _))
+            if (TryNormalizeGraphqlUrl(m.Value, out var url))
                 sink.Add(url);
         }
 
         // SPA Apollo-style relative: uri: '/graphql'
         foreach (Match m in Regex.Matches(
                      text,
-                     @"['""](/graphql[^'""\s]*)['""]",
+                     @"['""](/graphql[a-zA-Z0-9._\-/]*)['""]",
                      RegexOptions.IgnoreCase))
         {
             var path = m.Groups[1].Value;
             if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var page)
-                && Uri.TryCreate(page, path, out var abs))
+                && Uri.TryCreate(page, path, out var abs)
+                && TryNormalizeGraphqlUrl(abs.ToString(), out var url))
             {
-                sink.Add(abs.ToString());
+                sink.Add(url);
             }
 
             AddHeuristicGraphqlEndpoints(baseUrl, sink);
         }
+    }
+
+    private static bool TryNormalizeGraphqlUrl(string raw, out string url)
+    {
+        url = "";
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var cleaned = raw.Trim().TrimEnd('.', ',', ';', ')', ']', '\'', '"', '`');
+        // Drop fragment/query junk often glued by minified JS regex hits.
+        var hash = cleaned.IndexOf('#');
+        if (hash >= 0) cleaned = cleaned[..hash];
+        var q = cleaned.IndexOf('?');
+        if (q >= 0) cleaned = cleaned[..q];
+
+        if (!Uri.TryCreate(cleaned, UriKind.Absolute, out var uri))
+            return false;
+        if (uri.Scheme is not ("http" or "https"))
+            return false;
+        if (string.IsNullOrWhiteSpace(uri.Host) || uri.Host.Contains(' ', StringComparison.Ordinal))
+            return false;
+        if (!uri.AbsolutePath.Contains("graphql", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        url = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+        if (!url.EndsWith("graphql", StringComparison.OrdinalIgnoreCase)
+            && !url.Contains("/graphql/", StringComparison.OrdinalIgnoreCase))
+        {
+            // keep only paths that still clearly target graphql
+            if (!uri.AbsolutePath.EndsWith("/graphql", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(uri.AbsolutePath, "/graphql", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
     }
 
     private static void CollectGraphqlUrls(string text, HashSet<string> sink) =>
