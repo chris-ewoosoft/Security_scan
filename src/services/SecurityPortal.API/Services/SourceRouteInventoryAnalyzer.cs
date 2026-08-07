@@ -527,6 +527,10 @@ public static partial class SourceRouteInventoryAnalyzer
 
         foreach (Match m in CsHttpAttributeRegex().Matches(text))
         {
+            // Ignore attribute-shaped examples inside // or /* comments (e.g. analyzer docs).
+            if (IsInsideCsharpComment(text, m.Index))
+                continue;
+
             var method = m.Groups["method"].Value.ToUpperInvariant() switch
             {
                 "GET" => "GET",
@@ -562,6 +566,34 @@ public static partial class SourceRouteInventoryAnalyzer
             if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
                 authz.Add(new AuthzCandidate(method, path, file, line, ownerToken));
         }
+    }
+
+    private static bool IsInsideCsharpComment(string text, int index)
+    {
+        if (index < 0 || index >= text.Length) return false;
+
+        // Line comment: // ...
+        var lineStart = text.LastIndexOf('\n', Math.Max(0, index - 1)) + 1;
+        var prefix = text.AsSpan(lineStart, index - lineStart);
+        var slash = prefix.LastIndexOf("//");
+        if (slash >= 0)
+        {
+            // crude string guard: odd number of quotes before // → inside string
+            var before = prefix[..slash];
+            if (before.Count('"') % 2 == 0)
+                return true;
+        }
+
+        // Block comment: /* ... */
+        var open = text.LastIndexOf("/*", index, StringComparison.Ordinal);
+        if (open >= 0)
+        {
+            var close = text.IndexOf("*/", open + 2, StringComparison.Ordinal);
+            if (close < 0 || close >= index)
+                return true;
+        }
+
+        return false;
     }
 
     private static bool MethodHasAllowAnonymous(string text, int index)
@@ -838,7 +870,7 @@ public static partial class SourceRouteInventoryAnalyzer
             code,
             parameters);
 
-    // Matches [HttpGet], [HttpGet("x")], [HttpGet("{id:guid}")], etc.
+    // Matches HttpGet / HttpPost attributes with optional quoted path template.
     [GeneratedRegex(
         """\[Http(?<method>Get|Post|Put|Delete|Patch)(?:\(\s*"(?<path>[^"]*)"\s*\))?\]""",
         RegexOptions.IgnoreCase)]

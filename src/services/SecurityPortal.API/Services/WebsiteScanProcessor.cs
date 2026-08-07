@@ -1994,12 +1994,27 @@ public sealed class WebsiteScanProcessor(
         if (allHits.Count > 0)
         {
             var sample = allHits[0];
+            var sourceSet = new HashSet<string>(
+                sourceProbePaths.Select(p => p.Trim().TrimStart('/')),
+                StringComparer.OrdinalIgnoreCase);
+            static string HitPath(string url)
+            {
+                try { return new Uri(url).AbsolutePath.Trim('/'); }
+                catch { return url.Trim().TrimStart('/'); }
+            }
+            var novelHits = allHits.Where(h => !sourceSet.Contains(HitPath(h.Url))).ToList();
+            var severity = novelHits.Count > 0 ? "Medium" : "Info";
+            var code = novelHits.Count > 0 ? "directory.found" : "directory.source_confirmed";
             return
             [
-                Finding(check, tools, "Medium", "directory.found", P(
+                Finding(check, tools, severity, code, P(
                         ("url", sample.Url), ("status", sample.Status.ToString()),
-                        ("observed", $"{toolName ?? "discovery"} found {allHits.Count} path(s) across {origins.Count} origin(s). Sample: {string.Join(", ", allHits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
-                        ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
+                        ("observed", $"{toolName ?? "discovery"} found {allHits.Count} path(s) across {origins.Count} origin(s)" +
+                                     (novelHits.Count > 0 ? $" ({novelHits.Count} novel)." : " (all already in source inventory).") +
+                                     $" Sample: {string.Join(", ", allHits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
+                        ("impact", novelHits.Count > 0
+                            ? "Exposed administration, backup, or API paths can focus attacker activity."
+                            : "These paths were already inventoried from source — treat as coverage confirmation.")),
                     $"tool={toolName}; targets={origins.Count}; {string.Join("; ", allHits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
             ];
         }
@@ -2063,13 +2078,25 @@ public sealed class WebsiteScanProcessor(
         if (found.Count > 0)
         {
             var sample = found[0];
+            // Paths already known from source AllowAnonymous inventory are confirmation, not new exposure.
+            var sourceSet = new HashSet<string>(
+                sourceProbePaths.Select(p => p.Trim().TrimStart('/')),
+                StringComparer.OrdinalIgnoreCase);
+            var novel = found.Where(f => !sourceSet.Contains(f.Path.Trim().TrimStart('/'))).ToList();
+            var severity = novel.Count > 0 ? "Medium" : "Info";
+            var code = novel.Count > 0 ? "directory.found" : "directory.source_confirmed";
+            var list = novel.Count > 0 ? novel : found;
             return
             [
-                Finding(check, tools, "Medium", "directory.found", P(
+                Finding(check, tools, severity, code, P(
                         ("url", sample.Url), ("status", sample.Code.ToString()),
-                        ("observed", $"The built-in wordlist found {found.Count} paths: {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}."),
-                        ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
-                    string.Join("; ", found.Select(f => $"{f.Url} -> {f.Code} [{f.Note}]")))
+                        ("observed", novel.Count > 0
+                            ? $"The built-in wordlist found {found.Count} paths ({novel.Count} not in source inventory): {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}."
+                            : $"Built-in discovery confirmed {found.Count} source-derived path(s): {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}."),
+                        ("impact", novel.Count > 0
+                            ? "Exposed administration, backup, or API paths can focus attacker activity."
+                            : "These paths were already inventoried from source — treat as coverage confirmation.")),
+                    string.Join("; ", list.Select(f => $"{f.Url} -> {f.Code} [{f.Note}]")))
             ];
         }
 
