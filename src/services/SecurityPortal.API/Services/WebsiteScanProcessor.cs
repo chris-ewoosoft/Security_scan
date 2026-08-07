@@ -254,7 +254,21 @@ public sealed class WebsiteScanProcessor(
         findings.AddRange(sourceFindings);
         findings.AddRange(authFindings);
 
-        foreach (var check in selectedChecks)
+        // Prefer CVE/misconfig Nuclei before exposure scan so the larger budget is not spent first.
+        var checkList = selectedChecks.ToList();
+        var orderedChecks = checkList
+            .Select((c, index) => (Check: c, Index: index))
+            .OrderBy(x => x.Check.Id switch
+            {
+                "vulnerability-scan" => 0,
+                "sensitive-file-scan" => 1,
+                _ => 2
+            })
+            .ThenBy(x => x.Index)
+            .Select(x => x.Check)
+            .ToList();
+
+        foreach (var check in orderedChecks)
         {
             await EnsureNotCancelledAsync(scanId, cancellationToken);
 
@@ -1928,24 +1942,26 @@ public sealed class WebsiteScanProcessor(
             if (nuclei is { Ran: true })
             {
                 var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
+                var partial = nuclei.Summary.Contains("partial", StringComparison.OrdinalIgnoreCase)
+                              || nuclei.ExitCode == -1;
                 if (count > 0)
                 {
                     return
                     [
                         Finding(check, tools, "High", "vuln.nuclei.hits",
-                            P(("observed", $"Nuclei ({nucleiOpts.Profile}) reported {count} finding(s). Sample: {Truncate(nuclei.Summary)}"),
+                            P(("observed", $"Nuclei ({nucleiOpts.Profile}) reported {count} finding(s){(partial ? " (partial run)" : "")}. Sample: {Truncate(nuclei.Summary)}"),
                                 ("impact", "Template-based scanner detected exposures or CVEs."),
                                 ("targetUrl", targetUrl)),
-                            $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; count={count}; exit={nuclei.ExitCode}")
+                            $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; count={count}; exit={nuclei.ExitCode}; partial={partial}")
                     ];
                 }
 
                 return
                 [
                     Finding(check, tools, "Info", "vuln.nuclei.none",
-                        P(("observed", $"Nuclei ({nucleiOpts.Profile}) completed with no hits for severity={nucleiOpts.Severity}."),
+                        P(("observed", $"Nuclei ({nucleiOpts.Profile}) completed with no hits for severity={nucleiOpts.Severity}{(partial ? " (partial/timed out with empty stdout)" : "")}."),
                             ("targetUrl", targetUrl)),
-                        $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; exit={nuclei.ExitCode}")
+                        $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; exit={nuclei.ExitCode}; partial={partial}")
                 ];
             }
 

@@ -316,18 +316,19 @@ public sealed class NucleiToolOptions
                 // Without tags, Nuclei walks the entire template pack and often hits MaxDuration.
                 if (string.IsNullOrWhiteSpace(Tags))
                     Tags = "cve,misconfig";
-                if (MaxDurationSeconds == 120) MaxDurationSeconds = 240;
+                if (MaxDurationSeconds == 120) MaxDurationSeconds = 180;
                 break;
             case "deep":
                 if (Severity is "medium,high,critical" or "")
-                    Severity = "info,low,medium,high,critical";
+                    Severity = "low,medium,high,critical";
+                // Keep tags actionable; xss/sqli/rce fuzz packs are too slow for portal budgets.
                 if (string.IsNullOrWhiteSpace(Tags))
-                    Tags = "cve,misconfig,exposure,vuln,default-login,xss,sqli,rce";
-                if (Concurrency == 25) Concurrency = 40;
+                    Tags = "cve,misconfig,exposure,vuln,default-login";
+                if (Concurrency == 25) Concurrency = 30;
                 if (TimeoutSeconds == 8) TimeoutSeconds = 10;
-                if (MaxDurationSeconds == 120) MaxDurationSeconds = 300;
-                if (RateLimit == 150) RateLimit = 200;
-                if (Retries == 1) Retries = 2;
+                if (MaxDurationSeconds == 120) MaxDurationSeconds = 240;
+                if (RateLimit == 150) RateLimit = 180;
+                if (Retries == 1) Retries = 1;
                 break;
         }
     }

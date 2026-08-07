@@ -204,8 +204,8 @@ public static class ExternalToolRunner
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(timeout);
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+            var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
             try
             {
                 await process.WaitForExitAsync(cts.Token);
@@ -213,6 +213,22 @@ public static class ExternalToolRunner
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                // Preserve any JSONL already emitted (Nuclei often has useful partial hits).
+                var partialOut = "";
+                var partialErr = "";
+                try { partialOut = await stdoutTask; } catch { /* ignore */ }
+                try { partialErr = await stderrTask; } catch { /* ignore */ }
+                if (!string.IsNullOrWhiteSpace(partialOut))
+                {
+                    return new ToolRunResult(
+                        true,
+                        toolName,
+                        -1,
+                        partialOut,
+                        partialErr,
+                        Truncate(partialOut, 800) + $" (partial; timed out after {timeout.TotalSeconds:0}s)");
+                }
+
                 return new ToolRunResult(false, toolName, -1, "", "timeout", $"{toolName} timed out after {timeout.TotalSeconds:0}s");
             }
 
@@ -244,14 +260,12 @@ public static class ExternalToolRunner
         if (!IsAvailable("nuclei")) return null;
         options ??= NucleiToolOptions.CreateDefault();
         options.Normalize();
-        var templates = Environment.GetEnvironmentVariable("NUCLEI_TEMPLATES_PATH");
-        var templateArg = !string.IsNullOrWhiteSpace(templates) && Directory.Exists(templates)
-            ? $" -t {Quote(templates)}"
-            : "";
+        var templateArg = BuildNucleiTemplateArgs(options, exposureMode: false);
         var tagsArg = string.IsNullOrWhiteSpace(options.Tags) ? "" : $" -tags {Quote(options.Tags)}";
         var extra = string.IsNullOrWhiteSpace(extraArgs) ? "" : " " + extraArgs.Trim();
+        // -ni: skip interactsh wait; -duc: skip update check — both cut wall-clock significantly.
         var args =
-            $"-u {Quote(targetUrl)} -silent -jsonl -severity {options.Severity} -c {options.Concurrency} -rl {options.RateLimit} -timeout {options.TimeoutSeconds} -retries {options.Retries}{templateArg}{tagsArg}{extra}";
+            $"-u {Quote(targetUrl)} -silent -jsonl -severity {options.Severity} -c {options.Concurrency} -rl {options.RateLimit} -timeout {options.TimeoutSeconds} -retries {options.Retries} -ni -duc{templateArg}{tagsArg}{extra}";
         return await RunAsync("nuclei", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
     }
 
@@ -260,23 +274,62 @@ public static class ExternalToolRunner
     {
         options ??= NucleiToolOptions.CreateDefault();
         options.Normalize();
+        // Cap exposure budget so vulnerability-scan keeps most of the wall-clock.
+        var exposureBudget = Math.Clamp(options.MaxDurationSeconds / 3, 45, 90);
         var exposure = new NucleiToolOptions
         {
             Profile = options.Profile,
-            Severity = options.Severity,
+            Severity = options.Severity is "info,low,medium,high,critical"
+                ? "low,medium,high,critical"
+                : options.Severity,
             Tags = string.IsNullOrWhiteSpace(options.ExposureTags)
                 ? "exposure,config,backup,token,key,file"
                 : options.ExposureTags,
             ExposureTags = options.ExposureTags,
-            Concurrency = options.Concurrency,
+            Concurrency = Math.Min(options.Concurrency, 25),
             RateLimit = options.RateLimit,
-            TimeoutSeconds = options.TimeoutSeconds,
-            Retries = options.Retries,
-            MaxDurationSeconds = options.MaxDurationSeconds,
+            TimeoutSeconds = Math.Min(options.TimeoutSeconds, 8),
+            Retries = Math.Min(options.Retries, 1),
+            MaxDurationSeconds = exposureBudget,
         };
-        // Skip profile re-application of Tags; values already chosen.
-        exposure.Normalize();
-        return await TryNucleiAsync(targetUrl, ct, extraArgs: null, exposure);
+        var templateArg = BuildNucleiTemplateArgs(exposure, exposureMode: true);
+        var tagsArg = $" -tags {Quote(exposure.Tags!)}";
+        var args =
+            $"-u {Quote(targetUrl)} -silent -jsonl -severity {exposure.Severity} -c {exposure.Concurrency} -rl {exposure.RateLimit} -timeout {exposure.TimeoutSeconds} -retries {exposure.Retries} -ni -duc{templateArg}{tagsArg}";
+        return await RunAsync("nuclei", args, TimeSpan.FromSeconds(exposure.MaxDurationSeconds), ct);
+    }
+
+    /// <summary>
+    /// Prefer focused http/* subdirs over the full template pack — loading all templates is the main timeout cause.
+    /// </summary>
+    private static string BuildNucleiTemplateArgs(NucleiToolOptions options, bool exposureMode)
+    {
+        var root = Environment.GetEnvironmentVariable("NUCLEI_TEMPLATES_PATH");
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            return "";
+
+        var http = Path.Combine(root, "http");
+        if (!Directory.Exists(http))
+            return $" -t {Quote(root)}";
+
+        string[] subs = exposureMode
+            ? ["exposures", "misconfiguration"]
+            : options.Profile switch
+            {
+                "quick" => ["cves"],
+                "deep" => ["cves", "misconfiguration", "vulnerabilities", "default-logins", "exposures"],
+                _ => ["cves", "misconfiguration"],
+            };
+
+        var parts = new List<string>();
+        foreach (var sub in subs)
+        {
+            var path = Path.Combine(http, sub);
+            if (Directory.Exists(path))
+                parts.Add($" -t {Quote(path)}");
+        }
+
+        return parts.Count > 0 ? string.Concat(parts) : $" -t {Quote(http)}";
     }
 
     public static async Task<ToolRunResult?> TryDnsxAsync(string host, CancellationToken ct)

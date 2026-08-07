@@ -53,17 +53,17 @@ window.SecurityPortalConfig = (() => {
   ];
 
   const DEFAULT_TOOL_OPTIONS = {
-      nuclei: {
-        profile: "balanced",
-        severity: "medium,high,critical",
-        tags: "cve,misconfig",
-        exposureTags: "exposure,config,backup,token,key,file",
-        concurrency: 25,
-        rateLimit: 150,
-        timeoutSeconds: 8,
-        retries: 1,
-        maxDurationSeconds: 240,
-      },
+    nuclei: {
+      profile: "balanced",
+      severity: "medium,high,critical",
+      tags: "cve,misconfig",
+      exposureTags: "exposure,config,backup,token,key,file",
+      concurrency: 25,
+      rateLimit: 150,
+      timeoutSeconds: 8,
+      retries: 1,
+      maxDurationSeconds: 180,
+    },
     naabu: {
       ports: "21,22,25,53,80,110,143,443,445,993,995,3306,3389,5432,6379,8080,8443",
       rate: 200,
@@ -106,20 +106,20 @@ window.SecurityPortalConfig = (() => {
     deep: {
       nuclei: {
         profile: "deep",
-        severity: "info,low,medium,high,critical",
-        tags: "cve,misconfig,exposure,vuln,default-login,xss,sqli,rce",
-        exposureTags: "exposure,config,backup,token,key,file,secret,dotenv",
-        concurrency: 40,
-        rateLimit: 200,
+        severity: "low,medium,high,critical",
+        tags: "cve,misconfig,exposure,vuln,default-login",
+        exposureTags: "exposure,config,backup,token,key,file",
+        concurrency: 30,
+        rateLimit: 180,
         timeoutSeconds: 10,
-        retries: 2,
-        maxDurationSeconds: 300,
+        retries: 1,
+        maxDurationSeconds: 240,
       },
-      feroxbuster: { depth: 2, threads: 40, timeoutSeconds: 8, maxDurationSeconds: 180 },
-      ffuf: { threads: 40, timeoutSeconds: 8, maxDurationSeconds: 180, matchCodes: "200,204,301,302,401,403" },
+      feroxbuster: { depth: 2, threads: 30, timeoutSeconds: 8, maxDurationSeconds: 120 },
+      ffuf: { threads: 30, timeoutSeconds: 8, maxDurationSeconds: 120, matchCodes: "200,204,301,302,401,403" },
       naabu: {
-        ports: "21,22,25,53,80,110,143,443,445,993,995,1433,1521,3306,3389,5432,5900,6379,8080,8443,9200,27017",
-        rate: 400,
+        ports: "22,80,443,3306,3389,5432,6379,8080,8443",
+        rate: 300,
       },
     },
   };
