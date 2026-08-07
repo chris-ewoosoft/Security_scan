@@ -1,8 +1,51 @@
 window.SecurityPortalApi = (() => {
   const candidates = ["/api/v1", "http://localhost:5000/api/v1"];
+  const TOKEN_STORE_KEY = "sp.scanAccess.v1";
 
   function currentLang() {
     return window.SecurityPortalI18n?.getLocale?.() || "vi";
+  }
+
+  function loadTokenMap() {
+    try {
+      const raw = localStorage.getItem(TOKEN_STORE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveTokenMap(map) {
+    try {
+      localStorage.setItem(TOKEN_STORE_KEY, JSON.stringify(map));
+    } catch { /* ignore */ }
+  }
+
+  function rememberScanAccess(scanId, accessToken) {
+    if (!scanId || !accessToken) return;
+    const map = loadTokenMap();
+    map[scanId] = accessToken;
+    const ids = Object.keys(map);
+    if (ids.length > 80) {
+      ids.slice(0, ids.length - 80).forEach((id) => delete map[id]);
+    }
+    saveTokenMap(map);
+  }
+
+  function getScanAccessToken(scanId) {
+    return loadTokenMap()[scanId] || null;
+  }
+
+  function getAllScanAccessTokens() {
+    return loadTokenMap();
+  }
+
+  function forgetScanAccess(ids) {
+    const map = loadTokenMap();
+    (ids || []).forEach((id) => delete map[id]);
+    saveTokenMap(map);
   }
 
   async function apiFetch(path, options = {}) {
@@ -78,18 +121,18 @@ window.SecurityPortalApi = (() => {
       const parts = [];
       let rest = line;
       while (rest.length > maxChars) {
-        const window = rest.slice(0, maxChars + 1);
+        const windowSlice = rest.slice(0, maxChars + 1);
         const breakAt = Math.max(
-          window.lastIndexOf(" "),
-          window.lastIndexOf("\t"),
-          window.lastIndexOf(";"),
-          window.lastIndexOf(","),
-          window.lastIndexOf("|"),
-          window.lastIndexOf("/"),
-          window.lastIndexOf("?"),
-          window.lastIndexOf("&"),
-          window.lastIndexOf("="),
-          window.lastIndexOf(":")
+          windowSlice.lastIndexOf(" "),
+          windowSlice.lastIndexOf("\t"),
+          windowSlice.lastIndexOf(";"),
+          windowSlice.lastIndexOf(","),
+          windowSlice.lastIndexOf("|"),
+          windowSlice.lastIndexOf("/"),
+          windowSlice.lastIndexOf("?"),
+          windowSlice.lastIndexOf("&"),
+          windowSlice.lastIndexOf("="),
+          windowSlice.lastIndexOf(":")
         );
         const cut = breakAt > maxChars * 0.45 ? breakAt + 1 : maxChars;
         parts.push(rest.slice(0, cut).trimEnd());
@@ -109,5 +152,18 @@ window.SecurityPortalApi = (() => {
     }
   }
 
-  return { apiFetch, extractError, normalizeUrl, statusClass, severityClass, escapeHtml, wrapReportLines, formatWhen };
+  return {
+    apiFetch,
+    extractError,
+    normalizeUrl,
+    statusClass,
+    severityClass,
+    escapeHtml,
+    wrapReportLines,
+    formatWhen,
+    rememberScanAccess,
+    getScanAccessToken,
+    getAllScanAccessTokens,
+    forgetScanAccess,
+  };
 })();

@@ -1,6 +1,7 @@
 using FluentValidation;
 using SecurityPortal.Application.Features.Scans.Commands;
 using SecurityPortal.Domain.Entities;
+using SecurityPortal.Domain.Security;
 
 namespace SecurityPortal.Application.Features.Scans.Validators;
 
@@ -11,7 +12,7 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
         RuleFor(x => x.TargetUrl)
             .NotEmpty().WithMessage("Website address is required.")
             .MaximumLength(2048)
-            .Must(BeValidWebsiteUrl).WithMessage("Enter a valid website address (e.g. https://example.com).");
+            .Must(BeSafeWebsiteUrl).WithMessage("Enter a valid public http(s) website address (private/loopback/metadata hosts are blocked).");
 
         RuleForEach(x => x.Checks!)
             .Must(id => ScanCatalog.ValidCheckIds.Contains(id))
@@ -47,10 +48,10 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
 
             RuleFor(x => x.Auth!.LoginUrl!)
                 .MaximumLength(2048)
-                .Must(BeValidWebsiteUrl)
+                .Must(BeSafeWebsiteUrl)
                 .When(x => !string.IsNullOrWhiteSpace(x.Auth!.LoginUrl)
                            || x.Auth!.Type!.Equals("graphql", StringComparison.OrdinalIgnoreCase))
-                .WithMessage("Enter a valid login / GraphQL URL.");
+                .WithMessage("Enter a valid public login / GraphQL URL.");
 
             RuleFor(x => x.Auth!.LoginUrl)
                 .NotEmpty()
@@ -62,8 +63,8 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
         {
             RuleFor(x => x.Source!.RepositoryUrl!)
                 .MaximumLength(2048)
-                .Must(BeValidWebsiteUrl)
-                .WithMessage("Enter a valid https Git repository URL.");
+                .Must(BeSafeWebsiteUrl)
+                .WithMessage("Enter a valid public https Git repository URL.");
 
             RuleFor(x => x.Source!.Branch!)
                 .MaximumLength(200)
@@ -75,15 +76,16 @@ public class StartWebsiteScanCommandValidator : AbstractValidator<StartWebsiteSc
         });
     }
 
-    private static bool BeValidWebsiteUrl(string? value)
+    private static bool BeSafeWebsiteUrl(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        var input = value.Trim();
-        if (!input.Contains("://", StringComparison.Ordinal))
-            input = "https://" + input;
-
-        return Uri.TryCreate(input, UriKind.Absolute, out var uri)
-               && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
-               && !string.IsNullOrWhiteSpace(uri.Host);
+        try
+        {
+            ScanHostSafety.EnsureSafeHttpTarget(value, "URL");
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

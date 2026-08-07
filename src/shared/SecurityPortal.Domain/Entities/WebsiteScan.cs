@@ -1,6 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using SecurityPortal.Domain.Common;
 using SecurityPortal.Domain.Common.Exceptions;
+using SecurityPortal.Domain.Security;
 
 namespace SecurityPortal.Domain.Entities;
 
@@ -45,17 +48,31 @@ public class WebsiteScan : AggregateRoot
         if (string.IsNullOrWhiteSpace(targetUrl))
             throw new DomainException("Website URL is required.");
 
+        ScanHostSafety.EnsureSafeHttpTarget(targetUrl, "Website URL");
+
         if (!Uri.TryCreate(NormalizeUrl(targetUrl), UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
             throw new DomainException("Enter a valid http:// or https:// website address.");
         }
 
+        // Strip credentials from stored target.
+        var builder = new UriBuilder(uri) { UserName = "", Password = "" };
+        uri = builder.Uri;
+
         config.Validate();
+        if (string.IsNullOrWhiteSpace(config.OwnerTokenHash))
+            throw new DomainException("Scan owner token is required.");
+
+        if (config.Auth?.IsEnabled == true && !string.IsNullOrWhiteSpace(config.Auth.LoginUrl))
+            ScanHostSafety.EnsureSafeHttpTarget(config.Auth.LoginUrl, "Login URL");
+
+        if (config.Source?.IsEnabled == true)
+            ScanHostSafety.EnsureSafeHttpTarget(config.Source.RepositoryUrl, "Source repository URL");
 
         return new WebsiteScan
         {
-            TargetUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/'),
+            TargetUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/').Replace("://@", "://", StringComparison.Ordinal),
             NormalizedHost = uri.Host.ToLowerInvariant(),
             CreatedByUserId = createdByUserId,
             OrganizationId = organizationId,
@@ -63,6 +80,25 @@ public class WebsiteScan : AggregateRoot
             ConfigJson = JsonSerializer.Serialize(config, JsonOptions),
             ReportType = config.ReportType
         };
+    }
+
+    public bool MatchesOwnerToken(string? plaintextToken)
+    {
+        var hash = GetConfiguration().OwnerTokenHash;
+        if (string.IsNullOrWhiteSpace(hash) || string.IsNullOrWhiteSpace(plaintextToken))
+            return false;
+        var actual = HashOwnerToken(plaintextToken);
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(hash),
+            Encoding.UTF8.GetBytes(actual));
+    }
+
+    public static string CreateOwnerToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+    public static string HashOwnerToken(string plaintext)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(plaintext.Trim()));
+        return Convert.ToHexString(bytes);
     }
 
     public ScanConfiguration GetConfiguration()
@@ -147,6 +183,8 @@ public sealed class ScanConfiguration
     public string ReportType { get; set; } = ScanCatalog.DefaultReportType;
     public ScanAuthConfiguration? Auth { get; set; }
     public ScanSourceConfiguration? Source { get; set; }
+    /// <summary>SHA-256 hex of browser-held access token. Never store plaintext.</summary>
+    public string? OwnerTokenHash { get; set; }
 
     public static ScanConfiguration CreateDefault()
     {
@@ -236,7 +274,9 @@ public sealed class ScanSourceConfiguration
             throw new DomainException("Local or file:// repository URLs are not allowed.");
         }
 
-        RepositoryUrl = uri.ToString().TrimEnd('/');
+        ScanHostSafety.EnsureSafeHost(uri.Host, "Source repository host");
+
+        RepositoryUrl = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
         if (uri.Host.StartsWith("github_pat_", StringComparison.OrdinalIgnoreCase)
             || uri.Host.StartsWith("ghp_", StringComparison.OrdinalIgnoreCase)
             || uri.Host.StartsWith("glpat-", StringComparison.OrdinalIgnoreCase)

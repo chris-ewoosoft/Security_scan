@@ -9,13 +9,25 @@ using SecurityPortal.Domain.Entities;
 
 namespace SecurityPortal.Infrastructure.Security;
 
-public sealed class JwtService(IConfiguration configuration) : IJwtService
+public sealed class JwtService : IJwtService
 {
-    private readonly string _secretKey = configuration["Jwt:SecretKey"]
-        ?? throw new InvalidOperationException("JWT SecretKey is not configured.");
-    private readonly string _issuer = configuration["Jwt:Issuer"] ?? "SecurityPortal";
-    private readonly string _audience = configuration["Jwt:Audience"] ?? "SecurityPortal";
-    private readonly int _accessTokenExpiryMinutes = int.Parse(configuration["Jwt:AccessTokenExpiryMinutes"] ?? "15");
+    private readonly string _secretKey;
+    private readonly string _issuer;
+    private readonly string _audience;
+    private readonly int _accessTokenExpiryMinutes;
+
+    public JwtService(IConfiguration configuration)
+    {
+        _secretKey = configuration["Jwt:SecretKey"]
+            ?? throw new InvalidOperationException("JWT SecretKey is not configured.");
+        _issuer = configuration["Jwt:Issuer"] ?? "SecurityPortal";
+        _audience = configuration["Jwt:Audience"] ?? "SecurityPortal";
+        var expiryMinutes = int.Parse(configuration["Jwt:AccessTokenExpiryMinutes"] ?? "15");
+        if (expiryMinutes <= 0)
+            throw new InvalidOperationException(
+                "Jwt:AccessTokenExpiryMinutes must be a positive integer (current value: " + expiryMinutes + ").");
+        _accessTokenExpiryMinutes = expiryMinutes;
+    }
 
     public string GenerateAccessToken(User user, IEnumerable<string> roles, IEnumerable<string> permissions)
     {

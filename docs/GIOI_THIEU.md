@@ -31,16 +31,16 @@ Giao diện hỗ trợ **tiếng Việt / tiếng Anh** (chuyển ngôn ngữ t�
 | | Information Disclosure | Header nhạy cảm |
 | | **Authenticated Scan** | Đăng nhập rồi quét khu vực sau login |
 | **Source-assisted** | **Source Route Inventory** | Shallow clone Git, trích route/API từ source, gợi ý thiếu tenant guard |
-| **Mạng** | Port Scan | Probe TCP cổng phổ biến (Naabu: worker ngoài) |
-| | DNS Security | Resolve DNS |
-| | WAF Detection | Fingerprint WAF qua header |
-| **Khám phá** | Directory Discovery | Wordlist path nhạy cảm |
+| **Mạng** | Port Scan | TCP probe; chạy **Naabu** nếu binary có trên PATH |
+| | DNS Security | Resolve DNS; dùng **dnsx** nếu có |
+| | WAF Detection | Fingerprint header; dùng **wafw00f** nếu có |
+| **Khám phá** | Directory Discovery | Wordlist tích hợp; **Feroxbuster** / **FFUF** nếu có trên PATH |
 | | Sensitive File Scan | `.env`, `.git`, backup, … |
 | | Technology Detection | Suy luận stack từ header |
-| | Screenshot | Placeholder — cần worker Gowitness |
-| **Lỗ hổng** | Vulnerability Scan | Placeholder — cần worker Nuclei |
+| | Screenshot | **Gowitness** nếu có; không thì Info placeholder |
+| **Lỗ hổng** | Vulnerability Scan | **Nuclei** nếu có; không thì Info placeholder |
 
-> Các check **Built-in** chạy trực tiếp trong API. Một số module ghi chú tool ngoài (Naabu, Nuclei, …) đang ở dạng catalog / placeholder cho worker tương lai.
+> Check **Built-in** luôn chạy trong API. Tool ngoài (Naabu, Nuclei, Ferox, …) được gọi khi **đã chọn trong cấu hình** và binary có trên `PATH` của host/API container; nếu thiếu thì fallback probe tích hợp hoặc finding placeholder.
 
 ### 2.2 Scan có đăng nhập (Authenticated Scan)
 
@@ -96,7 +96,7 @@ Bật **Phân tích source code (Git)** trên form trang chủ:
 
 | Thành phần | Mô tả |
 |---|---|
-| **Risk Score** | 0–100 (High +25, Medium +12, Low +5) |
+| **Risk Score** | 0–100 (điểm giảm dần theo số finding cùng severity; có High → tối thiểu 55) |
 | **Risk Level** | Low &lt; 40 · Medium 40–69 · High ≥ 70 |
 | **Findings** | Mức độ, tiêu đề, chi tiết, evidence, khuyến nghị, bước tái hiện |
 | **Executive Summary** | Tóm tắt rủi ro |
@@ -111,11 +111,11 @@ Nút **Export Report** xuất PDF/HTML từ báo cáo hiện tại.
 
 ### 2.5 Theo dõi tiến trình
 
-Giao diện **poll** `GET /api/v1/scans/{id}` mỗi vài giây để cập nhật trạng thái: `Queued` → `Running` → `Completed` / `Failed` / `Cancelled`. Có thể **Dừng scan** khi đang chạy.
+Giao diện **poll** `GET /api/v1/scans/{id}` (header `X-Scan-Token`) mỗi vài giây. Có thể **Dừng scan** khi đang chạy. Poll dùng `AbortController` để tránh chồng request.
 
 ### 2.6 Lịch sử quét
 
-**Chức năng → Lịch sử:** xem lại báo cáo, chọn nhiều bản ghi để xóa.
+**Chức năng → Lịch sử:** chỉ hiện scan mà trình duyệt còn giữ access token (`localStorage`). API `GET /scans` mở không còn liệt kê toàn bộ (chống IDOR). Xóa cần gửi `accessTokens` khớp.
 
 ---
 
@@ -134,13 +134,13 @@ Truy cập Security Portal qua trình duyệt (thường qua Nginx reverse proxy
 
 ### Bước 3 — Nhập mục tiêu
 
-1. **Website URL** — ví dụ `https://example.com` hoặc IP nội bộ `http://172.76.10.211`
+1. **Website URL** — ví dụ `https://example.com` (host private/loopback/IMDS bị chặn chống SSRF)
 2. (Tuỳ chọn) **Scan với đăng nhập** — điền credential và loại auth
 3. (Tuỳ chọn) **Phân tích source code** — repo Git + PAT nếu private
 
 ### Bước 4 — Bắt đầu scan
 
-Nhấn **Bắt đầu scan**. Báo cáo hiển thị ở cột phải khi hoàn tất.
+Nhấn **Bắt đầu scan**. Response trả `accessToken` một lần — trình duyệt lưu để xem lại / dừng / xóa. Báo cáo hiển thị ở cột phải khi hoàn tất.
 
 ### Bước 5 — Đọc findings
 
@@ -165,8 +165,11 @@ Nhấn **Bắt đầu scan**. Báo cáo hiển thị ở cột phải khi hoàn 
 |---|---|
 | Password scan | AES-GCM mã hóa trước khi lưu DB; API chỉ trả `UsernameMasked` |
 | PAT / Git token | Mã hóa tương tự password; không xuất hiện trong findings (đã sanitize) |
+| Access token scan | Hash SHA-256 lưu DB; plaintext chỉ trả một lần lúc Start |
+| Mục tiêu HTTP | Chặn private/loopback/link-local/IMDS (SSRF) |
 | Log request | `LoggingBehavior` redact field password/token |
 | PAT lộ | Revoke ngay trên Git forge và tạo token mới |
+| `ScanSecrets:Key` | Bắt buộc ngoài Development |
 
 **Không** dán PAT vào ô Repository URL. **Không** commit token vào Git.
 
@@ -212,10 +215,12 @@ Swagger: `http://localhost:<port>/swagger`
 |---|---|
 | HTTP baseline + auth surface | ✅ Hoạt động |
 | Source route inventory | ✅ Hoạt động (LibGit2Sharp) |
+| External tools (Naabu/Nuclei/Ferox/…) | ✅ Gọi nếu có trên PATH; không thì fallback |
+| Scan access token (chống IDOR) | ✅ Start trả token; Get/Cancel/History/Delete yêu cầu |
+| SSRF host safety | ✅ Chặn private/loopback/IMDS |
 | Cross-org BOLA runtime (2 account) | 🔜 Chưa có |
-| Nuclei / Gowitness workers | 🔜 Placeholder |
 | SignalR progress realtime | 🔜 UI dùng HTTP poll |
-| Đăng ký / JWT đầy đủ | 🔜 Một số endpoint scan cho phép anonymous |
+| Đăng ký / JWT đầy đủ | 🔜 Scan API vẫn AllowAnonymous + owner token |
 
 ---
 

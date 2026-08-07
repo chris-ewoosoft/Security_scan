@@ -9,6 +9,7 @@ using SecurityPortal.Application.Common.Interfaces;
 using SecurityPortal.Application.Features.Scans.DTOs;
 using SecurityPortal.Application.Features.Scans.Localization;
 using SecurityPortal.Domain.Entities;
+using SecurityPortal.Domain.Security;
 
 namespace SecurityPortal.API.Services;
 
@@ -120,7 +121,8 @@ public sealed class WebsiteScanProcessor(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogWarning(ex, "Scan {ScanId} failed for {Url}", scan.Id, scan.TargetUrl);
+                logger.LogWarning("Scan {ScanId} failed for {Url}: {Error}",
+                    scan.Id, scan.TargetUrl, ScanSecretSanitizer.Sanitize(ex.Message));
                 db.Entry(scan).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
                 var fresh = await scans.GetByIdAsync(scan.Id, stoppingToken);
                 if (fresh is not null && fresh.Status == ScanStatus.Running)
@@ -146,8 +148,9 @@ public sealed class WebsiteScanProcessor(
 
     private static HttpClientHandler CreateScanHandler() => new()
     {
-        AllowAutoRedirect = true,
-        MaxAutomaticRedirections = 12,
+        // Redirects are followed manually via SendWithSafeRedirectsAsync (SSRF checks per hop).
+        AllowAutoRedirect = false,
+        MaxAutomaticRedirections = 0,
         UseCookies = true,
         CookieContainer = new System.Net.CookieContainer(),
         AutomaticDecompression = System.Net.DecompressionMethods.All,
@@ -174,6 +177,9 @@ public sealed class WebsiteScanProcessor(
         IFileStorage? fileStorage,
         CancellationToken cancellationToken)
     {
+        // Re-check at runtime (DNS may have changed since queue).
+        ScanHostSafety.EnsureSafeHttpTarget(targetUrl, "Website URL");
+
         var authFindings = new List<ScanFindingDto>();
         var sourceFindings = new List<ScanFindingDto>();
         var sourceProbePaths = new List<string>();
@@ -231,7 +237,8 @@ public sealed class WebsiteScanProcessor(
 
         var sw = Stopwatch.StartNew();
         using var request = new HttpRequestMessage(HttpMethod.Get, targetUrl);
-        using var response = await client.SendAsync(
+        using var response = await SendWithSafeRedirectsAsync(
+            client,
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
@@ -279,11 +286,11 @@ public sealed class WebsiteScanProcessor(
                 "port-scan" => await EvaluatePortScanAsync(check, tools, targetUrl, cancellationToken),
                 "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, cancellationToken),
                 "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, cancellationToken),
-                "vulnerability-scan" => EvaluateVulnerabilityPlaceholder(check, tools, targetUrl),
+                "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, cancellationToken),
                 "technology-detection" => EvaluateTechnology(check, tools, headers, server, poweredBy),
-                "screenshot" => EvaluateScreenshotPlaceholder(check, tools, targetUrl),
+                "screenshot" => await EvaluateScreenshotAsync(check, tools, targetUrl, cancellationToken),
                 "dns-security" => await EvaluateDnsAsync(check, tools, targetUrl, cancellationToken),
-                "waf-detection" => EvaluateWaf(check, tools, headers, server),
+                "waf-detection" => await EvaluateWafAsync(check, tools, targetUrl, headers, server, cancellationToken),
                 _ => []
             };
             findings.AddRange(batch);
@@ -545,7 +552,8 @@ public sealed class WebsiteScanProcessor(
                 diffs.Add($"{path}: anon={anon.StatusCode} -> auth={auth.StatusCode}");
             }
             else if (anon.StatusCode is >= 400 && auth.StatusCode is >= 200 and < 300
-                     && anon.BodyFingerprint != auth.BodyFingerprint)
+                     && anon.BodyFingerprint != auth.BodyFingerprint
+                     && !IsSoft404OrSpaFallback(auth, anon, path, allowHtml: true))
             {
                 diffs.Add($"{path}: anon={anon.StatusCode} -> auth={auth.StatusCode}");
             }
@@ -553,7 +561,9 @@ public sealed class WebsiteScanProcessor(
 
         if (diffs.Count > 0)
         {
-            findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, "Medium", "auth.surface.authz_diff",
+            // Expected login gates are Info; only escalate when many API-like unlocks.
+            var severity = diffs.Count >= 3 ? "Medium" : "Info";
+            findings.Add(Finding(AuthCheckDef, AuthCheckDef.Tools, severity, "auth.surface.authz_diff",
                 P(("observed", $"Paths behave differently with an authenticated session: {string.Join("; ", diffs)}."),
                     ("impact", "These routes are gated by login; verify authorization (role/tenant) still restricts sensitive data."),
                     ("targetUrl", targetUrl)),
@@ -578,7 +588,7 @@ public sealed class WebsiteScanProcessor(
             {
                 Content = new StringContent(probeQuery, Encoding.UTF8, "application/json")
             };
-            using var resp = await client.SendAsync(req, cancellationToken);
+            using var resp = await SendWithSafeRedirectsAsync(client, req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
             return ((int)resp.StatusCode, body.Length > 400 ? body[..400] : body);
         }
@@ -655,7 +665,7 @@ public sealed class WebsiteScanProcessor(
             {
                 // Probe without credentials first to see if Basic is actually required.
                 using var unauthProbe = new HttpRequestMessage(HttpMethod.Get, targetUrl);
-                using var unauthResponse = await client.SendAsync(
+                using var unauthResponse = await SendWithSafeRedirectsAsync(client, 
                     unauthProbe, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 var unauthCode = (int)unauthResponse.StatusCode;
                 var challengesBasic = unauthResponse.Headers.WwwAuthenticate
@@ -672,7 +682,7 @@ public sealed class WebsiteScanProcessor(
                 var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{auth.Username}:{password}"));
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
                 using var probe = new HttpRequestMessage(HttpMethod.Get, targetUrl);
-                using var response = await client.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                using var response = await SendWithSafeRedirectsAsync(client, probe, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 var code = (int)response.StatusCode;
                 if (code is 401 or 403)
                     return new AuthAttemptResult(false, loginUrl, $"Basic auth rejected with HTTP {code}.");
@@ -686,7 +696,7 @@ public sealed class WebsiteScanProcessor(
 
             // Form login
             using var getLogin = new HttpRequestMessage(HttpMethod.Get, loginUrl);
-            using var loginPage = await client.SendAsync(getLogin, cancellationToken);
+            using var loginPage = await SendWithSafeRedirectsAsync(client, getLogin, cancellationToken);
             var html = await loginPage.Content.ReadAsStringAsync(cancellationToken);
 
             // SPA / Next.js pages often have no HTML form — try OIDC /auth/login then GraphQL.
@@ -756,7 +766,7 @@ public sealed class WebsiteScanProcessor(
         if (prefetchedHtml is null)
         {
             using var getLogin = new HttpRequestMessage(HttpMethod.Get, loginUrl);
-            using var loginPage = await client.SendAsync(getLogin, cancellationToken);
+            using var loginPage = await SendWithSafeRedirectsAsync(client, getLogin, cancellationToken);
             html = await loginPage.Content.ReadAsStringAsync(cancellationToken);
             pageUrl = loginPage.RequestMessage?.RequestUri?.AbsoluteUri ?? loginUrl;
         }
@@ -795,7 +805,7 @@ public sealed class WebsiteScanProcessor(
         using var post = new HttpRequestMessage(HttpMethod.Post, form.ActionUrl);
         post.Content = new FormUrlEncodedContent(form.Fields);
         post.Headers.TryAddWithoutValidation("Referer", pageUrl);
-        using var posted = await client.SendAsync(post, cancellationToken);
+        using var posted = await SendWithSafeRedirectsAsync(client, post, cancellationToken);
         var finalUrl = posted.RequestMessage?.RequestUri?.AbsoluteUri ?? form.ActionUrl;
         var body = await posted.Content.ReadAsStringAsync(cancellationToken);
         var codePost = (int)posted.StatusCode;
@@ -882,7 +892,7 @@ public sealed class WebsiteScanProcessor(
             Content = new FormUrlEncodedContent(Array.Empty<KeyValuePair<string, string>>())
         };
         confirmPost.Headers.TryAddWithoutValidation("Referer", currentUrl);
-        using var resp = await client.SendAsync(confirmPost, cancellationToken);
+        using var resp = await SendWithSafeRedirectsAsync(client, confirmPost, cancellationToken);
         var body = await resp.Content.ReadAsStringAsync(cancellationToken);
         var url = resp.RequestMessage?.RequestUri?.AbsoluteUri ?? actionUrl;
         return new OidcHopResult(body, url, (int)resp.StatusCode);
@@ -958,7 +968,7 @@ public sealed class WebsiteScanProcessor(
         {
             Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
         };
-        using var response = await client.SendAsync(request, cancellationToken);
+        using var response = await SendWithSafeRedirectsAsync(client, request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         var code = (int)response.StatusCode;
 
@@ -1032,7 +1042,7 @@ public sealed class WebsiteScanProcessor(
                 var abs = Uri.TryCreate(new Uri(pageUrl), src, out var uri) ? uri.ToString() : null;
                 if (abs is null) continue;
                 using var req = new HttpRequestMessage(HttpMethod.Get, abs);
-                using var res = await client.SendAsync(req, cancellationToken);
+                using var res = await SendWithSafeRedirectsAsync(client, req, cancellationToken);
                 if (!res.IsSuccessStatusCode) continue;
                 var js = await res.Content.ReadAsStringAsync(cancellationToken);
                 CollectGraphqlUrls(js, found);
@@ -1345,23 +1355,39 @@ public sealed class WebsiteScanProcessor(
         ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
     {
         var host = new Uri(targetUrl).Host;
+        ScanHostSafety.EnsureSafeHost(host, "Port-scan host");
         var ports = new[] { 21, 22, 25, 53, 80, 110, 143, 443, 445, 993, 995, 3306, 3389, 5432, 6379, 8080, 8443 };
         var open = new List<int>();
+        var toolUsed = "tcp-probe";
 
-        foreach (var port in ports)
+        if (tools.Contains("naabu", StringComparer.OrdinalIgnoreCase))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
+            var naabu = await ExternalToolRunner.TryNaabuAsync(host, ports, cancellationToken);
+            if (naabu is { Ran: true })
             {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromMilliseconds(700));
-                using var client = new System.Net.Sockets.TcpClient();
-                await client.ConnectAsync(host, port, cts.Token);
-                open.Add(port);
+                toolUsed = "naabu";
+                foreach (var p in ExternalToolRunner.ParseNaabuOpenPorts(naabu.StdOut))
+                    if (int.TryParse(p, out var port)) open.Add(port);
             }
-            catch
+        }
+
+        if (open.Count == 0 && toolUsed == "tcp-probe")
+        {
+            foreach (var port in ports)
             {
-                // closed / filtered
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(TimeSpan.FromMilliseconds(700));
+                    using var client = new System.Net.Sockets.TcpClient();
+                    await client.ConnectAsync(host, port, cts.Token);
+                    open.Add(port);
+                }
+                catch
+                {
+                    // closed / filtered
+                }
             }
         }
 
@@ -1371,21 +1397,76 @@ public sealed class WebsiteScanProcessor(
             return
             [
                 Finding(check, tools, "Medium", "port.open", P(
-                    ("host", host), ("port", open[0].ToString()), ("observed", $"TCP connections succeeded to {host} on {string.Join(", ", open)}."),
+                    ("host", host), ("port", open[0].ToString()), ("observed", $"TCP connections succeeded to {host} on {string.Join(", ", open)} (tool={toolUsed})."),
                     ("impact", risky.Count > 0 ? $"Sensitive management or database ports are exposed: {string.Join(", ", risky)}." : "Open ports increase the attack surface.")),
-                    $"host={host}; open={string.Join(',', open)}; ports_tested={ports.Length}")
+                    $"host={host}; open={string.Join(',', open)}; tool={toolUsed}; ports_tested={ports.Length}")
             ];
         }
 
         return
         [
-            Finding(check, tools, "Info", "port.none", P(("host", host)), $"host={host}; ports_tested={ports.Length}")
+            Finding(check, tools, "Info", "port.none", P(("host", host)), $"host={host}; tool={toolUsed}; ports_tested={ports.Length}")
         ];
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDirectoryDiscoveryAsync(
         HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
     {
+        // Prefer external discovery tools when selected and present on PATH.
+        if (tools.Contains("feroxbuster", StringComparer.OrdinalIgnoreCase))
+        {
+            var ferox = await ExternalToolRunner.TryFeroxAsync(targetUrl, cancellationToken);
+            if (ferox is { Ran: true })
+            {
+                var hits = ExternalToolRunner.ParseFeroxHits(ferox.StdOut);
+                if (hits.Count > 0)
+                {
+                    var sample = hits[0];
+                    return
+                    [
+                        Finding(check, tools, "Medium", "directory.found", P(
+                            ("url", sample.Url), ("status", sample.Status.ToString()),
+                            ("observed", $"Feroxbuster found {hits.Count} path(s). Sample: {string.Join(", ", hits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
+                            ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
+                            $"tool=feroxbuster; {string.Join("; ", hits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
+                    ];
+                }
+
+                return
+                [
+                    Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)),
+                        $"tool=feroxbuster; exit={ferox.ExitCode}")
+                ];
+            }
+        }
+
+        if (tools.Contains("ffuf", StringComparer.OrdinalIgnoreCase))
+        {
+            var ffuf = await ExternalToolRunner.TryFfufAsync(targetUrl, cancellationToken);
+            if (ffuf is { Ran: true })
+            {
+                var hits = ExternalToolRunner.ParseFfufHits(ffuf.StdOut);
+                if (hits.Count > 0)
+                {
+                    var sample = hits[0];
+                    return
+                    [
+                        Finding(check, tools, "Medium", "directory.found", P(
+                            ("url", sample.Url), ("status", sample.Status.ToString()),
+                            ("observed", $"FFUF found {hits.Count} path(s). Sample: {string.Join(", ", hits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
+                            ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
+                            $"tool=ffuf; {string.Join("; ", hits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
+                    ];
+                }
+
+                return
+                [
+                    Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)),
+                        $"tool=ffuf; exit={ffuf.ExitCode}")
+                ];
+            }
+        }
+
         var baseUri = new Uri(targetUrl.TrimEnd('/') + "/");
         var paths = new[]
         {
@@ -1520,9 +1601,19 @@ public sealed class WebsiteScanProcessor(
 
     private static async Task<UrlProbe?> ProbeUrlAsync(HttpClient client, string url, CancellationToken cancellationToken)
     {
+        try
+        {
+            ScanHostSafety.EnsureSafeHttpTarget(url);
+        }
+        catch
+        {
+            return null;
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.TryAddWithoutValidation("Accept", "*/*");
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendWithSafeRedirectsAsync(
+            client, request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         var status = (int)response.StatusCode;
         var contentType = response.Content.Headers.ContentType?.MediaType;
         var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? url;
@@ -1650,10 +1741,45 @@ public sealed class WebsiteScanProcessor(
         };
     }
 
-    private static IEnumerable<ScanFindingDto> EvaluateVulnerabilityPlaceholder(
-        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl)
+    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateVulnerabilityAsync(
+        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
     {
-        yield return Finding(check, tools, "Info", "vuln.placeholder", P(("targetUrl", targetUrl)), $"target={targetUrl}; tool=nuclei");
+        if (tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase))
+        {
+            var nuclei = await ExternalToolRunner.TryNucleiAsync(targetUrl, cancellationToken);
+            if (nuclei is { Ran: true })
+            {
+                var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
+                if (count > 0)
+                {
+                    return
+                    [
+                        Finding(check, tools, "High", "vuln.nuclei.hits",
+                            P(("observed", $"Nuclei reported {count} finding(s). Sample: {Truncate(nuclei.Summary)}"),
+                                ("impact", "Template-based scanner detected exposures or CVEs."),
+                                ("targetUrl", targetUrl)),
+                            $"tool=nuclei; count={count}; exit={nuclei.ExitCode}")
+                    ];
+                }
+
+                return
+                [
+                    Finding(check, tools, "Info", "vuln.nuclei.none",
+                        P(("observed", "Nuclei completed with no medium/high/critical hits."),
+                            ("targetUrl", targetUrl)),
+                        $"tool=nuclei; exit={nuclei.ExitCode}")
+                ];
+            }
+        }
+
+        return
+        [
+            Finding(check, tools, "Info", "vuln.placeholder",
+                P(("observed", "Nuclei binary not available on scanner host; vulnerability templates were skipped."),
+                    ("impact", "Install Nuclei on the API/worker image or keep sensitive-file-scan enabled."),
+                    ("targetUrl", targetUrl)),
+                $"target={targetUrl}; tool=nuclei; available=false")
+        ];
     }
 
     private static IEnumerable<ScanFindingDto> EvaluateTechnology(
@@ -1679,23 +1805,75 @@ public sealed class WebsiteScanProcessor(
             P(("tech", string.Join("; ", tech))), tech.Count > 0 ? string.Join("; ", tech) : null);
     }
 
-    private static IEnumerable<ScanFindingDto> EvaluateScreenshotPlaceholder(
-        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl)
+    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateScreenshotAsync(
+        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
     {
-        yield return Finding(check, tools, "Info", "screenshot.placeholder", P(("targetUrl", targetUrl)), $"target={targetUrl}; tool=gowitness");
+        if (tools.Contains("gowitness", StringComparer.OrdinalIgnoreCase)
+            && ExternalToolRunner.IsAvailable("gowitness"))
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "sp-gowitness", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var run = await ExternalToolRunner.RunAsync(
+                    "gowitness",
+                    $"single {QuoteArg(targetUrl)} --screenshot-path {QuoteArg(dir)}",
+                    TimeSpan.FromSeconds(45),
+                    cancellationToken);
+                if (run.Ran && run.ExitCode == 0)
+                {
+                    return
+                    [
+                        Finding(check, tools, "Info", "screenshot.ok",
+                            P(("observed", $"Gowitness captured screenshot for {targetUrl}."),
+                                ("targetUrl", targetUrl)),
+                            $"tool=gowitness; path={dir}")
+                    ];
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { /* ignore */ }
+            }
+        }
+
+        return
+        [
+            Finding(check, tools, "Info", "screenshot.placeholder",
+                P(("observed", "Gowitness not available on scanner host."),
+                    ("targetUrl", targetUrl)),
+                $"target={targetUrl}; tool=gowitness; available=false")
+        ];
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDnsAsync(
         ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
     {
         var host = new Uri(targetUrl).Host;
+        if (tools.Contains("dnsx", StringComparer.OrdinalIgnoreCase))
+        {
+            var dnsx = await ExternalToolRunner.TryDnsxAsync(host, cancellationToken);
+            if (dnsx is { Ran: true } && !string.IsNullOrWhiteSpace(dnsx.StdOut))
+            {
+                return
+                [
+                    Finding(check, tools, "Info", "dns.ok",
+                        P(("host", host), ("addresses", Truncate(dnsx.StdOut))),
+                        $"host={host}; tool=dnsx; out={Truncate(dnsx.StdOut)}")
+                ];
+            }
+        }
+
         try
         {
             var addresses = await System.Net.Dns.GetHostAddressesAsync(host, cancellationToken);
-            var evidence = string.Join(", ", addresses.Select(a => a.ToString()));
+            // Do not echo private IPs into findings if somehow resolved (should be blocked earlier).
+            var publicAddrs = addresses.Where(a => !ScanHostSafety.IsBlockedIp(a)).Select(a => a.ToString()).ToList();
+            var evidence = string.Join(", ", publicAddrs);
             return
             [
-                Finding(check, tools, "Info", "dns.ok", P(("host", host), ("addresses", evidence)), $"host={host}; addrs={evidence}")
+                Finding(check, tools, "Info", "dns.ok", P(("host", host), ("addresses", evidence)),
+                    $"host={host}; tool=system-dns; addrs={evidence}")
             ];
         }
         catch (Exception ex)
@@ -1709,25 +1887,108 @@ public sealed class WebsiteScanProcessor(
         }
     }
 
-    private static IEnumerable<ScanFindingDto> EvaluateWaf(
-        ScanCheckDefinition check, IReadOnlyList<string> tools, Dictionary<string, string> headers, string? server)
+    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateWafAsync(
+        ScanCheckDefinition check,
+        IReadOnlyList<string> tools,
+        string targetUrl,
+        Dictionary<string, string> headers,
+        string? server,
+        CancellationToken cancellationToken)
     {
+        if (tools.Contains("wafw00f", StringComparer.OrdinalIgnoreCase))
+        {
+            var waf = await ExternalToolRunner.TryWafw00fAsync(targetUrl, cancellationToken);
+            if (waf is { Ran: true } && !string.IsNullOrWhiteSpace(waf.StdOut + waf.StdErr))
+            {
+                var text = (waf.StdOut + "\n" + waf.StdErr);
+                var found = text.Contains("is behind", StringComparison.OrdinalIgnoreCase)
+                            || text.Contains("WAF", StringComparison.OrdinalIgnoreCase);
+                return
+                [
+                    Finding(check, tools, found ? "Info" : "Info",
+                        found ? "waf.found" : "waf.none",
+                        P(("signals", Truncate(text))),
+                        $"tool=wafw00f; {Truncate(text)}")
+                ];
+            }
+        }
+
         var signals = new List<string>();
         if (headers.ContainsKey("CF-Ray") || headers.ContainsKey("CF-Cache-Status")) signals.Add("Cloudflare");
-        if (headers.ContainsKey("X-Sucuri-ID") || headers.ContainsKey("X-Sucuri-Cache")) signals.Add("Sucuri");
-        if (headers.ContainsKey("X-Akamai-Transformed") || headers.ContainsKey("Akamai-Origin-Hop")) signals.Add("Akamai");
-        if (headers.ContainsKey("X-CDN") || headers.ContainsKey("X-Iinfo")) signals.Add("Imperva/Incapsula?");
-        if (server?.Contains("cloudflare", StringComparison.OrdinalIgnoreCase) == true && !signals.Contains("Cloudflare"))
-            signals.Add("Cloudflare");
+        if (headers.ContainsKey("X-Sucuri-ID")) signals.Add("Sucuri");
+        if (headers.ContainsKey("X-Akamai-Transformed") || (server?.Contains("AkamaiGHost", StringComparison.OrdinalIgnoreCase) ?? false))
+            signals.Add("Akamai");
+        if (headers.ContainsKey("X-Iinfo") || headers.ContainsKey("X-CDN")) signals.Add("Imperva/Incapsula-like");
 
         if (signals.Count > 0)
         {
-            yield return Finding(check, tools, "Info", "waf.found", P(("signals", string.Join(", ", signals))), string.Join("; ", signals));
+            return
+            [
+                Finding(check, tools, "Info", "waf.found", P(("signals", string.Join(", ", signals))),
+                    $"tool=header-fingerprint; {string.Join(',', signals)}")
+            ];
         }
-        else
+
+        return
+        [
+            Finding(check, tools, "Info", "waf.none", P(), "tool=header-fingerprint")
+        ];
+    }
+
+    private static string QuoteArg(string value) =>
+        "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    private static Task<HttpResponseMessage> SendWithSafeRedirectsAsync(
+        HttpClient client,
+        HttpRequestMessage initial,
+        CancellationToken cancellationToken) =>
+        SendWithSafeRedirectsAsync(client, initial, HttpCompletionOption.ResponseContentRead, cancellationToken);
+
+    private static async Task<HttpResponseMessage> SendWithSafeRedirectsAsync(
+        HttpClient client,
+        HttpRequestMessage initial,
+        HttpCompletionOption completion,
+        CancellationToken cancellationToken,
+        int maxRedirects = 8)
+    {
+        var method = initial.Method;
+        var currentUrl = initial.RequestUri?.ToString()
+            ?? throw new InvalidOperationException("Request URI required.");
+        ScanHostSafety.EnsureSafeHttpTarget(currentUrl);
+
+        HttpContent? content = initial.Content;
+        var headerCopy = initial.Headers.ToList();
+        HttpRequestMessage request = initial;
+        for (var hop = 0; hop <= maxRedirects; hop++)
         {
-            yield return Finding(check, tools, "Low", "waf.none", P(), null);
+            var response = await client.SendAsync(request, completion, cancellationToken);
+            if (response.StatusCode is not (HttpStatusCode.MovedPermanently or HttpStatusCode.Found
+                or HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect))
+            {
+                return response;
+            }
+
+            var location = response.Headers.Location;
+            response.Dispose();
+            if (location is null)
+                throw new InvalidOperationException("Redirect without Location header.");
+
+            var next = location.IsAbsoluteUri
+                ? location
+                : new Uri(new Uri(currentUrl), location);
+            if (!ScanHostSafety.IsSafeRedirectTarget(next))
+                throw new InvalidOperationException($"Blocked redirect to unsafe host: {next.Host}");
+
+            currentUrl = next.ToString();
+            // After POST redirect, browsers typically switch to GET (303/302).
+            method = HttpMethod.Get;
+            content = null;
+            request = new HttpRequestMessage(method, currentUrl);
+            foreach (var h in headerCopy)
+                request.Headers.TryAddWithoutValidation(h.Key, h.Value);
         }
+
+        throw new InvalidOperationException("Too many redirects.");
     }
 
     private static string SanitizeSetCookieEvidence(string setCookie)
@@ -1772,18 +2033,24 @@ public sealed class WebsiteScanProcessor(
 
     private static int Score(IReadOnlyList<ScanFindingDto> findings)
     {
-        var score = 0;
-        foreach (var f in findings)
-        {
-            score += f.Severity switch
-            {
-                "High" => 25,
-                "Medium" => 12,
-                "Low" => 5,
-                _ => 0
-            };
-        }
-        return Math.Clamp(score, 0, 100);
+        // Diminishing returns per severity bucket + floor from max severity.
+        var high = findings.Count(f => f.Severity == "High");
+        var medium = findings.Count(f => f.Severity == "Medium");
+        var low = findings.Count(f => f.Severity == "Low");
+
+        double score = 0;
+        for (var i = 0; i < high; i++)
+            score += 25 * Math.Pow(0.85, i);
+        for (var i = 0; i < medium; i++)
+            score += 12 * Math.Pow(0.8, i);
+        for (var i = 0; i < low; i++)
+            score += 5 * Math.Pow(0.75, i);
+
+        var rounded = (int)Math.Round(score);
+        if (high > 0) rounded = Math.Max(rounded, 55);      // at least Medium level
+        else if (medium > 0) rounded = Math.Max(rounded, 25);
+
+        return Math.Clamp(rounded, 0, 100);
     }
 
     private static string BuildExecutiveSummary(
