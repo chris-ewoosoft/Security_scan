@@ -1302,6 +1302,48 @@ body.page-config .topbar {
   padding: 0;
 }
 
+.preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.9rem;
+  align-items: center;
+}
+
+.config-preset-hint {
+  margin: 0.35rem 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.tools-status {
+  margin: 0 0 0.85rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.06);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.tool-avail {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.tool-avail.is-ready {
+  background: rgba(16, 185, 129, 0.16);
+  color: #047857;
+}
+
+.tool-avail.is-missing {
+  background: rgba(245, 158, 11, 0.18);
+  color: #b45309;
+}
+
 .muted {
   color: var(--muted);
 }

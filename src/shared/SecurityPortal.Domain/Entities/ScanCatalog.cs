@@ -15,42 +15,42 @@ public static class ScanCatalog
         new("server-fingerprint", "Server Fingerprint", "Thu thập thông tin lộ qua Server / X-Powered-By.",
             ["fingerprint"], true, "recon", 3),
         new("cookie-security", "Cookie Security", "Kiểm tra cờ Secure, HttpOnly, SameSite trên Set-Cookie.",
-            ["cookie-inspector"], false, "owasp", 3),
+            ["cookie-inspector"], true, "owasp", 3),
         new("authenticated-scan", "Authenticated Scan", "Đăng nhập form/basic rồi quét khu vực sau login.",
             ["http-probe"], false, "owasp", 4),
         new("route-inventory", "Source Route Inventory",
             "Clone Git (shallow) và trích xuất inventory route/API từ source để định hướng scan.",
             ["source-analyzer"], false, "recon", 5),
         new("cors-policy", "CORS Policy", "Đánh giá Access-Control-Allow-Origin và cấu hình CORS lộ ra.",
-            ["cors-checker"], false, "owasp", 3),
+            ["cors-checker"], true, "owasp", 3),
         new("information-disclosure", "Information Disclosure", "Phát hiện header nhạy cảm và dấu hiệu lộ thông tin.",
-            ["header-analyzer", "fingerprint"], false, "recon", 3),
+            ["header-analyzer", "fingerprint"], true, "recon", 3),
 
-        // ── High-value external modules ──────────────────────────────────
+        // ── High-value external modules (default ON for max detection) ───
         new("port-scan", "Port Scan",
             "Quét cổng mở trên host mục tiêu. Tool chính: Naabu (full). Portal có probe TCP nhanh cho cổng phổ biến.",
-            ["naabu"], false, "network", 5),
+            ["naabu"], true, "network", 5),
         new("directory-discovery", "Directory Discovery",
             "Khám phá đường dẫn / thư mục ẩn. Tool: Feroxbuster hoặc FFUF. Portal probe wordlist ngắn các path nhạy cảm.",
-            ["feroxbuster", "ffuf"], false, "recon", 5),
+            ["feroxbuster", "ffuf"], true, "recon", 5),
         new("sensitive-file-scan", "Sensitive File Scan",
-            "Tìm file nhạy cảm (.env, backup, git, config). Tool: Nuclei templates. Portal probe danh sách path cơ bản.",
-            ["nuclei"], false, "vuln", 5),
+            "Tìm file nhạy cảm (.env, backup, git, config). Tool: Nuclei templates + probe path built-in.",
+            ["nuclei", "http-probe"], true, "vuln", 5),
         new("vulnerability-scan", "Vulnerability Scan",
             "Quét lỗ hổng theo template (CVE, misconfig, exposures). Tool: Nuclei.",
-            ["nuclei"], false, "vuln", 5),
+            ["nuclei"], true, "vuln", 5),
         new("technology-detection", "Technology Detection",
             "Nhận diện CMS/framework/JS stack. Tool: WhatWeb / Wappalyzer. Portal suy luận từ header + tín hiệu HTML.",
-            ["whatweb", "wappalyzer", "fingerprint"], false, "recon", 5),
+            ["whatweb", "wappalyzer", "fingerprint"], true, "recon", 5),
         new("screenshot", "Screenshot",
             "Chụp ảnh trang đích để lưu chứng cứ. Tool: Gowitness (cần runner + MinIO).",
             ["gowitness"], false, "recon", 4),
         new("dns-security", "DNS Security",
             "Kiểm tra bản ghi DNS (A/AAAA/CNAME) và tín hiệu cấu hình. Tool: dnsx.",
-            ["dnsx"], false, "network", 4),
+            ["dnsx"], true, "network", 4),
         new("waf-detection", "WAF Detection",
             "Phát hiện Web Application Firewall. Tool: wafw00f. Portal nhận diện qua header/fingerprint phổ biến.",
-            ["wafw00f"], false, "recon", 4),
+            ["wafw00f"], true, "recon", 4),
     ];
 
     public static IReadOnlyList<ScanToolDefinition> Tools { get; } =
@@ -88,10 +88,34 @@ public static class ScanCatalog
     public static HashSet<string> ValidToolIds { get; } = Tools.Select(t => t.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
     public static HashSet<string> ValidReportIds { get; } = Reports.Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Checks with EnabledByDefault — used as portal "Max detection" profile.</summary>
     public static IReadOnlyList<string> DefaultCheckIds { get; } =
         Checks.Where(c => c.EnabledByDefault).Select(c => c.Id).ToList();
 
+    /// <summary>Lightweight baseline (HTTP/TLS/headers/fingerprint only).</summary>
+    public static IReadOnlyList<string> BaselineCheckIds { get; } =
+    [
+        "reachability", "https-tls", "security-headers", "server-fingerprint"
+    ];
+
+    /// <summary>All checks that maximize detection (excludes source-only / optional heavy screenshot by default).</summary>
+    public static IReadOnlyList<string> MaxDetectionCheckIds { get; } =
+        Checks.Where(c => c.EnabledByDefault).Select(c => c.Id).ToList();
+
     public static string DefaultReportType => "technical";
+
+    public static IReadOnlyList<string> ToolsForChecks(IEnumerable<string> checkIds)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in checkIds)
+        {
+            var check = Checks.FirstOrDefault(c => c.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (check is null) continue;
+            foreach (var tool in check.Tools)
+                set.Add(tool);
+        }
+        return set.ToList();
+    }
 }
 
 public sealed record ScanCheckDefinition(

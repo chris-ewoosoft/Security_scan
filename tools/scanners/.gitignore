@@ -1,0 +1,6 @@
+# Local scanner CLI payloads (produced by scripts/install-scanners.sh)
+tools/scanners/bin/
+tools/scanners/pylib/
+tools/scanners/nuclei-templates/
+tools/scanners/wordlists/
+tools/scanners/env.sh

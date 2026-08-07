@@ -278,7 +278,7 @@ public sealed class WebsiteScanProcessor(
                 "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, cancellationToken),
                 "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, cancellationToken),
                 "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, cancellationToken),
-                "technology-detection" => EvaluateTechnology(check, tools, headers, server, poweredBy),
+                "technology-detection" => await EvaluateTechnologyAsync(check, tools, headers, server, poweredBy, targetUrl, cancellationToken),
                 "screenshot" => await EvaluateScreenshotAsync(check, tools, targetUrl, cancellationToken),
                 "dns-security" => await EvaluateDnsAsync(check, tools, targetUrl, cancellationToken),
                 "waf-detection" => await EvaluateWafAsync(check, tools, targetUrl, headers, server, cancellationToken),
@@ -1682,6 +1682,32 @@ public sealed class WebsiteScanProcessor(
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateSensitiveFilesAsync(
         HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
     {
+        var findings = new List<ScanFindingDto>();
+
+        if (tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase))
+        {
+            var nuclei = await ExternalToolRunner.TryNucleiExposuresAsync(targetUrl, cancellationToken);
+            if (nuclei is { Ran: true })
+            {
+                var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
+                if (count > 0)
+                {
+                    findings.Add(Finding(check, tools, "High", "sensitive.nuclei.hits",
+                        P(("observed", $"Nuclei exposure/config templates reported {count} finding(s). Sample: {Truncate(nuclei.Summary)}"),
+                            ("impact", "Exposed configs, backups, or secrets may be downloadable."),
+                            ("targetUrl", targetUrl)),
+                        $"tool=nuclei; count={count}; exit={nuclei.ExitCode}"));
+                }
+                else
+                {
+                    findings.Add(Finding(check, tools, "Info", "sensitive.nuclei.none",
+                        P(("observed", "Nuclei exposure templates returned no hits."),
+                            ("targetUrl", targetUrl)),
+                        $"tool=nuclei; exit={nuclei.ExitCode}"));
+                }
+            }
+        }
+
         var baseUri = new Uri(targetUrl.TrimEnd('/') + "/");
         var paths = new[]
         {
@@ -1690,7 +1716,6 @@ public sealed class WebsiteScanProcessor(
             "id_rsa", "server-status", "actuator/env", "api/swagger.json"
         };
 
-        // Baseline: path chắc chắn không tồn tại — dùng để phát hiện soft-404 / SPA fallback (HTTP 200 + HTML).
         var baseline = await ProbeUrlAsync(
             client,
             new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__.txt").ToString(),
@@ -1725,21 +1750,19 @@ public sealed class WebsiteScanProcessor(
         if (hits.Count > 0)
         {
             var sample = hits[0];
-            return
-            [
-                Finding(check, tools, "High", "sensitive.found", P(
-                    ("url", sample.Url), ("status", sample.Code.ToString()),
-                    ("observed", $"Validated sensitive paths returned HTTP 2xx: {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}."),
-                    ("impact", "Configuration, backup, or source files may expose secrets and system details.")),
-                    string.Join("; ", hits.Select(h => $"{h.Url} -> {h.Code}; {h.EvidenceNote}")))
-            ];
+            findings.Add(Finding(check, tools, "High", "sensitive.found", P(
+                ("url", sample.Url), ("status", sample.Code.ToString()),
+                ("observed", $"Validated sensitive paths returned HTTP 2xx: {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}."),
+                ("impact", "Configuration, backup, or source files may expose secrets and system details.")),
+                string.Join("; ", hits.Select(h => $"{h.Url} -> {h.Code}; {h.EvidenceNote}"))));
+        }
+        else if (findings.Count == 0)
+        {
+            findings.Add(Finding(check, tools, "Info", "sensitive.none", P(("targetUrl", targetUrl)),
+                baseline is null ? null : $"baseline_status={baseline.StatusCode}; baseline_ctype={baseline.ContentType ?? "unknown"}"));
         }
 
-        return
-        [
-            Finding(check, tools, "Info", "sensitive.none", P(("targetUrl", targetUrl)),
-                baseline is null ? null : $"baseline_status={baseline.StatusCode}; baseline_ctype={baseline.ContentType ?? "unknown"}")
-        ];
+        return findings;
     }
 
     private sealed record UrlProbe(
@@ -1933,13 +1956,16 @@ public sealed class WebsiteScanProcessor(
         ];
     }
 
-    private static IEnumerable<ScanFindingDto> EvaluateTechnology(
+    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateTechnologyAsync(
         ScanCheckDefinition check,
         IReadOnlyList<string> tools,
         Dictionary<string, string> headers,
         string? server,
-        string? poweredBy)
+        string? poweredBy,
+        string targetUrl,
+        CancellationToken cancellationToken)
     {
+        var findings = new List<ScanFindingDto>();
         var tech = new List<string>();
         if (!string.IsNullOrWhiteSpace(server)) tech.Add($"Server:{server}");
         if (!string.IsNullOrWhiteSpace(poweredBy)) tech.Add($"X-Powered-By:{poweredBy}");
@@ -1951,9 +1977,24 @@ public sealed class WebsiteScanProcessor(
         if (headers.ContainsKey("X-Drupal-Cache") || (gen?.Contains("Drupal", StringComparison.OrdinalIgnoreCase) == true))
             tech.Add("Drupal");
 
-        yield return Finding(check, tools, tech.Count > 0 ? "Low" : "Info",
+        if (tools.Contains("whatweb", StringComparer.OrdinalIgnoreCase))
+        {
+            var whatweb = await ExternalToolRunner.TryWhatWebAsync(targetUrl, cancellationToken);
+            if (whatweb is { Ran: true } && !string.IsNullOrWhiteSpace(whatweb.StdOut))
+            {
+                findings.Add(Finding(check, tools, "Info", "tech.whatweb",
+                    P(("observed", $"WhatWeb fingerprint: {Truncate(whatweb.Summary)}"),
+                        ("targetUrl", targetUrl)),
+                    $"tool=whatweb; exit={whatweb.ExitCode}"));
+            }
+        }
+
+        findings.Add(Finding(check, tools, tech.Count > 0 ? "Low" : "Info",
             tech.Count > 0 ? "tech.found" : "tech.none",
-            P(("tech", string.Join("; ", tech))), tech.Count > 0 ? string.Join("; ", tech) : null);
+            P(("tech", string.Join("; ", tech)), ("targetUrl", targetUrl)),
+            tech.Count > 0 ? string.Join("; ", tech) : null));
+
+        return findings;
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateScreenshotAsync(

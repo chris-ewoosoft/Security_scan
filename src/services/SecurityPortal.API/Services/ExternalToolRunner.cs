@@ -1,41 +1,136 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using SecurityPortal.Domain.Entities;
 
 namespace SecurityPortal.API.Services;
 
 /// <summary>
-/// Invokes optional external CLI tools when present on PATH; callers fall back to built-in probes.
+/// Invokes optional external CLI tools when present on PATH or SCANNER_TOOLS_PATH;
+/// callers fall back to built-in probes when binaries are missing.
 /// </summary>
 public static class ExternalToolRunner
 {
     public sealed record ToolRunResult(bool Ran, string Tool, int ExitCode, string StdOut, string StdErr, string Summary);
 
+    public static string? ToolsDirectory
+    {
+        get
+        {
+            var env = Environment.GetEnvironmentVariable("SCANNER_TOOLS_PATH");
+            if (!string.IsNullOrWhiteSpace(env) && Directory.Exists(env))
+                return Path.GetFullPath(env);
+            var siblings = new[]
+            {
+                Path.Combine(AppContext.BaseDirectory, "scanners", "bin"),
+                Path.Combine(Directory.GetCurrentDirectory(), "tools", "scanners", "bin"),
+                "/opt/scanners/bin",
+                "/shared/bin",
+            };
+            return siblings.FirstOrDefault(Directory.Exists);
+        }
+    }
+
+    public static string ResolveToolPath(string toolName)
+    {
+        var dir = ToolsDirectory;
+        if (dir is not null)
+        {
+            foreach (var name in CandidateFileNames(toolName))
+            {
+                var full = Path.Combine(dir, name);
+                if (File.Exists(full))
+                    return full;
+            }
+        }
+        return toolName; // rely on PATH
+    }
+
+    private static IEnumerable<string> CandidateFileNames(string toolName)
+    {
+        yield return toolName;
+        yield return toolName + ".exe";
+        if (OperatingSystem.IsWindows())
+            yield return toolName + ".cmd";
+    }
+
     public static bool IsAvailable(string toolName)
     {
         try
         {
+            var fileName = ResolveToolPath(toolName);
             var psi = new ProcessStartInfo
             {
-                FileName = toolName,
+                FileName = fileName,
                 Arguments = GetVersionArgs(toolName),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            ApplyToolEnvironment(psi);
             using var p = Process.Start(psi);
             if (p is null) return false;
-            if (!p.WaitForExit(3000))
+            if (!p.WaitForExit(4000))
             {
                 try { p.Kill(true); } catch { /* ignore */ }
                 return false;
             }
-            return p.ExitCode is 0 or 1 or 2; // many CLIs return non-zero for --version quirks
+            return p.ExitCode is 0 or 1 or 2;
         }
         catch
         {
             return false;
+        }
+    }
+
+    public static object DescribeAvailability()
+    {
+        var tools = ScanCatalog.Tools.Select(t =>
+        {
+            var isExternal = t.Kind.Equals("External", StringComparison.OrdinalIgnoreCase);
+            var available = !isExternal || IsAvailable(t.Id);
+            return new
+            {
+                id = t.Id,
+                name = t.Name,
+                kind = t.Kind,
+                available,
+                resolvedPath = isExternal ? ResolveToolPath(t.Id) : null
+            };
+        }).ToList();
+
+        return new
+        {
+            toolsPath = ToolsDirectory,
+            tools,
+            readyExternal = tools.Count(x => x.kind == "External" && x.available),
+            missingExternal = tools.Count(x => x.kind == "External" && !x.available),
+            installHint = "bash scripts/install-scanners.sh  OR  docker compose up -d --build scanners"
+        };
+    }
+
+    private static void ApplyToolEnvironment(ProcessStartInfo psi)
+    {
+        var dir = ToolsDirectory;
+        if (dir is null) return;
+        var path = psi.Environment["PATH"] ?? Environment.GetEnvironmentVariable("PATH") ?? "";
+        if (!path.Split(Path.PathSeparator).Contains(dir, StringComparer.OrdinalIgnoreCase))
+            psi.Environment["PATH"] = dir + Path.PathSeparator + path;
+
+        var pylib = Path.GetFullPath(Path.Combine(dir, "..", "pylib"));
+        if (Directory.Exists(pylib))
+        {
+            var existing = psi.Environment.TryGetValue("PYTHONPATH", out var py) ? py : Environment.GetEnvironmentVariable("PYTHONPATH");
+            psi.Environment["PYTHONPATH"] = string.IsNullOrWhiteSpace(existing) ? pylib : pylib + Path.PathSeparator + existing;
+        }
+
+        var templates = Environment.GetEnvironmentVariable("NUCLEI_TEMPLATES_PATH");
+        if (string.IsNullOrWhiteSpace(templates))
+        {
+            var local = Path.GetFullPath(Path.Combine(dir, "..", "nuclei-templates"));
+            if (Directory.Exists(local))
+                psi.Environment["NUCLEI_TEMPLATES_PATH"] = local;
         }
     }
 
@@ -48,6 +143,8 @@ public static class ExternalToolRunner
         "feroxbuster" => "--version",
         "ffuf" => "-V",
         "gowitness" => "version",
+        "whatweb" => "--version",
+        "wappalyzer" => "--version",
         _ => "--version"
     };
 
@@ -61,13 +158,14 @@ public static class ExternalToolRunner
         {
             var psi = new ProcessStartInfo
             {
-                FileName = toolName,
+                FileName = ResolveToolPath(toolName),
                 Arguments = arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            ApplyToolEnvironment(psi);
             using var process = new Process { StartInfo = psi };
             if (!process.Start())
                 return new ToolRunResult(false, toolName, -1, "", "failed to start", "not started");
@@ -105,24 +203,30 @@ public static class ExternalToolRunner
         return await RunAsync("naabu", args, TimeSpan.FromSeconds(45), ct);
     }
 
-    public static async Task<ToolRunResult?> TryNucleiAsync(string targetUrl, CancellationToken ct)
+    public static async Task<ToolRunResult?> TryNucleiAsync(string targetUrl, CancellationToken ct, string? extraArgs = null)
     {
         if (!IsAvailable("nuclei")) return null;
-        // tags: exposure,misconfig,cve — keep runtime bounded
-        var args = $"-u {Quote(targetUrl)} -silent -jsonl -severity medium,high,critical -c 25 -timeout 8 -retries 1";
-        return await RunAsync("nuclei", args, TimeSpan.FromSeconds(90), ct);
+        var templates = Environment.GetEnvironmentVariable("NUCLEI_TEMPLATES_PATH");
+        var templateArg = !string.IsNullOrWhiteSpace(templates) && Directory.Exists(templates)
+            ? $" -t {Quote(templates)}"
+            : "";
+        var extra = string.IsNullOrWhiteSpace(extraArgs) ? "" : " " + extraArgs.Trim();
+        var args =
+            $"-u {Quote(targetUrl)} -silent -jsonl -severity medium,high,critical -c 25 -timeout 8 -retries 1{templateArg}{extra}";
+        return await RunAsync("nuclei", args, TimeSpan.FromSeconds(120), ct);
     }
+
+    public static async Task<ToolRunResult?> TryNucleiExposuresAsync(string targetUrl, CancellationToken ct) =>
+        await TryNucleiAsync(targetUrl, ct, "-tags exposure,config,backup,token,key,file");
 
     public static async Task<ToolRunResult?> TryDnsxAsync(string host, CancellationToken ct)
     {
         if (!IsAvailable("dnsx")) return null;
-        var args = $"-a -aaaa -resp -silent -l -";
-        // dnsx reads hosts from stdin when -l -
         try
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "dnsx",
+                FileName = ResolveToolPath("dnsx"),
                 Arguments = "-a -aaaa -resp -silent",
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -130,6 +234,7 @@ public static class ExternalToolRunner
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            ApplyToolEnvironment(psi);
             using var process = Process.Start(psi);
             if (process is null) return null;
             await process.StandardInput.WriteLineAsync(host);
@@ -153,11 +258,19 @@ public static class ExternalToolRunner
         return await RunAsync("wafw00f", $"-a {Quote(targetUrl)}", TimeSpan.FromSeconds(40), ct);
     }
 
+    public static async Task<ToolRunResult?> TryWhatWebAsync(string targetUrl, CancellationToken ct)
+    {
+        if (!IsAvailable("whatweb")) return null;
+        return await RunAsync("whatweb", $"--color=never --log-json=- {Quote(targetUrl)}", TimeSpan.FromSeconds(45), ct);
+    }
+
     public static async Task<ToolRunResult?> TryFeroxAsync(string targetUrl, CancellationToken ct)
     {
         if (!IsAvailable("feroxbuster")) return null;
-        var args = $"-u {Quote(targetUrl)} -q -t 20 -d 1 --timeout 5 -n --json";
-        return await RunAsync("feroxbuster", args, TimeSpan.FromSeconds(60), ct);
+        var wordlist = FindWordlist();
+        var wl = wordlist is null ? "" : $" -w {Quote(wordlist)}";
+        var args = $"-u {Quote(targetUrl)} -q -t 20 -d 1 --timeout 5 -n --json{wl}";
+        return await RunAsync("feroxbuster", args, TimeSpan.FromSeconds(90), ct);
     }
 
     public static async Task<ToolRunResult?> TryFfufAsync(string targetUrl, CancellationToken ct)
@@ -167,7 +280,7 @@ public static class ExternalToolRunner
         if (wordlist is null) return null;
         var baseUrl = targetUrl.TrimEnd('/') + "/FUZZ";
         var args = $"-u {Quote(baseUrl)} -w {Quote(wordlist)} -mc 200,204,301,401,403 -t 20 -timeout 5 -s";
-        return await RunAsync("ffuf", args, TimeSpan.FromSeconds(60), ct);
+        return await RunAsync("ffuf", args, TimeSpan.FromSeconds(90), ct);
     }
 
     public static IReadOnlyList<string> ParseNaabuOpenPorts(string stdout)
@@ -183,7 +296,6 @@ public static class ExternalToolRunner
             }
             catch
             {
-                // plain "host:port"
                 var idx = line.LastIndexOf(':');
                 if (idx > 0 && int.TryParse(line[(idx + 1)..], out var port))
                     ports.Add(port);
@@ -217,14 +329,13 @@ public static class ExternalToolRunner
                     : root.TryGetProperty("path", out var p) ? p.GetString()
                     : null;
                 var status = root.TryGetProperty("status", out var s) && s.TryGetInt32(out var code) ? code
-                    : root.TryGetProperty("status_code", out var sc) && sc.TryGetInt32(out var code2) ? code2
                     : 0;
-                if (!string.IsNullOrWhiteSpace(url) && status is >= 200 and < 500)
+                if (!string.IsNullOrWhiteSpace(url) && status > 0)
                     hits.Add(new DiscoveryHit(url!, status));
             }
             catch
             {
-                // ignore non-json lines
+                // ignore non-json
             }
         }
         return hits
@@ -240,29 +351,35 @@ public static class ExternalToolRunner
         foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             // ffuf -s: "URL [Status: 200, Size: ...]" or plain URL
-            var url = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
-            if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) continue;
-            var status = 200;
-            var m = System.Text.RegularExpressions.Regex.Match(line, @"Status:\s*(\d{3})",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out var code)) status = code;
-            hits.Add(new DiscoveryHit(url, status));
+            var statusMatch = System.Text.RegularExpressions.Regex.Match(line, @"Status:\s*(\d{3})");
+            var url = line.Split(' ', 2)[0].Trim();
+            if (url.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                && statusMatch.Success
+                && int.TryParse(statusMatch.Groups[1].Value, out var code))
+            {
+                hits.Add(new DiscoveryHit(url, code));
+            }
         }
-        return hits
-            .GroupBy(h => h.Url, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
-            .Take(80)
-            .ToList();
+        return hits.Take(80).ToList();
     }
 
     private static string? FindWordlist()
     {
-        var candidates = new[]
+        var dir = ToolsDirectory;
+        var candidates = new List<string>();
+        if (dir is not null)
         {
+            candidates.Add(Path.Combine(dir, "common.txt"));
+            candidates.Add(Path.GetFullPath(Path.Combine(dir, "..", "wordlists", "common.txt")));
+        }
+        candidates.AddRange(
+        [
             "/usr/share/seclists/Discovery/Web-Content/common.txt",
             "/usr/share/wordlists/dirb/common.txt",
+            "/opt/scanners/wordlists/common.txt",
+            "/shared/wordlists/common.txt",
             Path.Combine(AppContext.BaseDirectory, "wordlists", "common.txt"),
-        };
+        ]);
         return candidates.FirstOrDefault(File.Exists);
     }
 

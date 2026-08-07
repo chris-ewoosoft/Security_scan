@@ -28,8 +28,15 @@ window.SecurityPortalConfigure = (() => {
           <section class="config-block">
             <div class="block-head">
               <h2>${escapeHtml(t("config.checks"))}</h2>
-              <button type="button" class="linkish" data-action="defaults">${escapeHtml(t("config.defaults"))}</button>
+              <div class="preset-actions">
+                <button type="button" class="linkish" data-action="preset-baseline">${escapeHtml(t("config.presetBaseline"))}</button>
+                <button type="button" class="linkish" data-action="preset-max">${escapeHtml(t("config.presetMax"))}</button>
+                <button type="button" class="linkish" data-action="preset-all">${escapeHtml(t("config.presetAll"))}</button>
+                <button type="button" class="linkish" data-action="defaults">${escapeHtml(t("config.defaults"))}</button>
+              </div>
             </div>
+            <p class="muted config-preset-hint">${escapeHtml(t("config.presetHint"))}</p>
+            <div data-role="tools-status" class="tools-status muted" hidden></div>
             <div data-role="checks-list" class="option-grid"></div>
           </section>
 
@@ -61,10 +68,50 @@ window.SecurityPortalConfigure = (() => {
     const formError = root.querySelector('[data-role="form-error"]');
     const saveBanner = root.querySelector('[data-role="save-banner"]');
     const saveBtn = root.querySelector('[data-action="save"]');
+    const toolsStatus = root.querySelector('[data-role="tools-status"]');
 
     let catalog = null;
     let suppressToolSync = false;
     let saveTimer = null;
+    let toolAvailability = null;
+
+    function applyCheckIds(ids) {
+      const set = new Set(ids);
+      suppressToolSync = true;
+      form.querySelectorAll('input[name="checks"]').forEach((el) => {
+        el.checked = set.has(el.value);
+      });
+      suppressToolSync = false;
+      syncToolsFromChecks();
+    }
+
+    function refreshToolsStatus() {
+      if (!toolsStatus) return;
+      apiFetch("/scans/tools-status", { headers: { Accept: "application/json" } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          toolAvailability = data;
+          if (!data?.tools) {
+            toolsStatus.hidden = true;
+            return;
+          }
+          const ready = data.tools.filter((t) => t.available).map((t) => t.id);
+          const missing = data.tools.filter((t) => !t.available && t.kind === "External").map((t) => t.id);
+          toolsStatus.hidden = false;
+          toolsStatus.innerHTML = [
+            `<strong>${escapeHtml(t("config.toolsStatusTitle"))}</strong>`,
+            ready.length
+              ? `${escapeHtml(t("config.toolsReady"))}: ${escapeHtml(ready.join(", "))}`
+              : escapeHtml(t("config.toolsNoneReady")),
+            missing.length
+              ? `${escapeHtml(t("config.toolsMissing"))}: ${escapeHtml(missing.join(", "))} — ${escapeHtml(t("config.toolsInstallHint"))}`
+              : "",
+          ].filter(Boolean).join(" · ");
+          // Refresh tool badges without losing current selection
+          if (catalog) renderCatalog(currentConfig());
+        })
+        .catch(() => { toolsStatus.hidden = true; });
+    }
 
     function selectedValues(name) {
       return [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((el) => el.value);
@@ -187,15 +234,24 @@ window.SecurityPortalConfigure = (() => {
         </label>
       `).join("");
 
-      toolsList.innerHTML = catalog.tools.map((tool) => `
+      toolsList.innerHTML = catalog.tools.map((tool) => {
+        const avail = toolAvailability?.tools?.find((x) => x.id === tool.id);
+        const badge = tool.kind === "External"
+          ? (avail
+            ? (avail.available
+              ? `<span class="tool-avail is-ready">${escapeHtml(t("config.toolReady"))}</span>`
+              : `<span class="tool-avail is-missing">${escapeHtml(t("config.toolMissing"))}</span>`)
+            : `<span class="tool-avail">${escapeHtml(tool.kind || "")}</span>`)
+          : `<span class="tool-kind">${escapeHtml(tool.kind || "")}</span>`;
+        return `
         <label class="option">
           <input type="checkbox" name="tools" value="${escapeHtml(tool.id)}" />
           <span>
-            <strong>${escapeHtml(tool.name)} <span class="tool-kind">${escapeHtml(tool.kind || "")}</span></strong>
+            <strong>${escapeHtml(tool.name)} ${badge}</strong>
             <small>${escapeHtml(tool.description)}</small>
           </span>
-        </label>
-      `).join("");
+        </label>`;
+      }).join("");
 
       reportsList.innerHTML = catalog.reports.map((report) => `
         <label class="option report">
@@ -225,20 +281,24 @@ window.SecurityPortalConfigure = (() => {
         options.onClose?.();
         return;
       }
-      if (action === "defaults") {
-        suppressToolSync = true;
-        form.querySelectorAll('input[name="checks"]').forEach((el) => {
-          const def = catalog.checks.find((c) => c.id === el.value);
-          el.checked = !!(def && def.enabledByDefault);
-        });
-        suppressToolSync = false;
-        syncToolsFromChecks();
+      if (action === "defaults" || action === "preset-max") {
+        applyCheckIds(ConfigStore.MAX_DETECTION_CHECKS || catalog.checks.filter((c) => c.enabledByDefault).map((c) => c.id));
         const technical = form.querySelector('input[name="reportType"][value="technical"]');
         if (technical) {
           form.querySelectorAll('input[name="reportType"]').forEach((el) => { el.checked = false; });
           technical.checked = true;
         }
-        persist(t("config.savedDefaults"));
+        persist(t("config.savedMax"));
+        return;
+      }
+      if (action === "preset-baseline") {
+        applyCheckIds(ConfigStore.BASELINE_CHECKS || ["reachability", "https-tls", "security-headers", "server-fingerprint"]);
+        persist(t("config.savedBaseline"));
+        return;
+      }
+      if (action === "preset-all") {
+        applyCheckIds((catalog.checks || []).map((c) => c.id));
+        persist(t("config.savedAll"));
         return;
       }
       if (action === "save") {
@@ -255,6 +315,7 @@ window.SecurityPortalConfigure = (() => {
         catalog = await res.json();
         const saved = ConfigStore.load();
         renderCatalog(saved);
+        refreshToolsStatus();
         saveBanner.hidden = false;
         saveBanner.textContent = saved.updatedAt
           ? t("config.savedAt", { when: formatWhen(saved.updatedAt) })

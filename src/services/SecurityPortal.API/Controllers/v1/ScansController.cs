@@ -5,6 +5,7 @@ using SecurityPortal.API.Services;
 using SecurityPortal.Application.Features.Scans.Commands;
 using SecurityPortal.Application.Features.Scans.DTOs;
 using SecurityPortal.Application.Features.Scans.Queries;
+using SecurityPortal.Domain.Entities;
 
 namespace SecurityPortal.API.Controllers.v1;
 
@@ -19,12 +20,19 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     public IActionResult BuildInfo() => Ok(new
     {
         service = "SecurityPortal.API",
-        fix = "ssrf-manual-redirects; MaxAutomaticRedirections-must-not-be-0",
-        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.1",
+        fix = "max-detection-presets; scanners-docker; MaxAutomaticRedirections-safe",
+        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.2",
         allowAutoRedirect = false,
         maxAutomaticRedirections = ScanHttpClientFactory.DefaultMaxAutomaticRedirections,
+        scannersPath = ExternalToolRunner.ToolsDirectory,
         utc = DateTime.UtcNow
     });
+
+    /// <summary>Which catalog tools are actually available on this API host (PATH / SCANNER_TOOLS_PATH).</summary>
+    [AllowAnonymous]
+    [HttpGet("tools-status")]
+    [ProducesResponseType(200)]
+    public IActionResult ToolsStatus() => Ok(ExternalToolRunner.DescribeAvailability());
 
     /// <summary>Catalog of security checks, tools, and report types</summary>
     [AllowAnonymous]
