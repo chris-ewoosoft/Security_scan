@@ -90,7 +90,7 @@ builder.Services.AddHttpClient("WebsiteScanner", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("SecurityPortal-Scanner/1.0");
-}).ConfigurePrimaryHttpMessageHandler(ScanHttpClientFactory.CreateHandler);
+}).ConfigurePrimaryHttpMessageHandler(() => ScanHttpClientFactory.CreateHandler(allowAutoRedirect: true));
 
 builder.Services.AddSingleton<SecurityPortal.API.Services.ScanCancellationRegistry>();
 builder.Services.AddSingleton<SecurityPortal.Application.Common.Interfaces.IScanAbortSignal, SecurityPortal.API.Services.ScanAbortSignal>();
