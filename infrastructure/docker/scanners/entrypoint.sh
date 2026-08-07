@@ -5,7 +5,7 @@ DEST="${SCANNER_SHARE_DIR:-/shared}"
 SRC="/opt/scanners"
 
 echo "[scanners] syncing tools from ${SRC} -> ${DEST}"
-mkdir -p "${DEST}/bin" "${DEST}/wordlists" "${DEST}/pylib" "${DEST}/nuclei-templates"
+mkdir -p "${DEST}/bin" "${DEST}/wordlists" "${DEST}/pylib" "${DEST}/nuclei-templates" "${DEST}/whatweb" "${DEST}/gems"
 
 if [[ -d "${SRC}/bin" ]]; then
   cp -a "${SRC}/bin/." "${DEST}/bin/"
@@ -15,6 +15,12 @@ if [[ -d "${SRC}/wordlists" ]]; then
 fi
 if [[ -d "${SRC}/pylib" ]]; then
   cp -a "${SRC}/pylib/." "${DEST}/pylib/"
+fi
+if [[ -d "${SRC}/whatweb" ]]; then
+  cp -a "${SRC}/whatweb/." "${DEST}/whatweb/"
+fi
+if [[ -d "${SRC}/gems" ]]; then
+  cp -a "${SRC}/gems/." "${DEST}/gems/"
 fi
 
 # Pre-fetch nuclei templates when network allows (best-effort)

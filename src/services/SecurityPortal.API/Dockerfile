@@ -1,4 +1,13 @@
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+# Runtime CLIs for scanners volume (wafw00f / whatweb wrappers)
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3 \
+      ruby \
+      ca-certificates \
+      libpcap0.8 \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 EXPOSE 8080
 

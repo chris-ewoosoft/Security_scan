@@ -1,61 +1,97 @@
-# Multi-stage image that builds security scanner CLIs into /opt/scanners/bin
-# Used by scripts/install-scanners.sh and docker-compose "scanners" service.
+# Prebuilt scanner CLIs for Security Portal.
+# Downloads GitHub release binaries (avoids go install / CGO / libpcap compile failures).
+FROM debian:bookworm-slim
 
-FROM golang:1.22-bookworm AS go-tools
+ARG TARGETARCH=amd64
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libpcap-dev gcc g++ make git ca-certificates curl unzip \
+      ca-certificates \
+      curl \
+      unzip \
+      libpcap0.8 \
+      python3 \
+      python3-pip \
+      ruby \
+      ruby-dev \
+      build-essential \
     && rm -rf /var/lib/apt/lists/*
-ENV CGO_ENABLED=1
-WORKDIR /src
-# Install ProjectDiscovery + ffuf + gowitness via go
-RUN go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
-RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-RUN go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
-RUN go install -v github.com/ffuf/ffuf/v2@latest
-RUN go install -v github.com/sensepost/gowitness@latest
 
-FROM rust:1-bookworm AS rust-tools
-RUN cargo install feroxbuster --locked
+WORKDIR /tmp/install
 
-FROM python:3.12-slim-bookworm AS py-tools
-RUN pip install --no-cache-dir wafw00f \
- && mkdir -p /out/bin /out/pylib \
- && SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") \
- && cp -a "$SITE"/wafw00f /out/pylib/ \
- && cp -a "$SITE"/wafw00f-*.dist-info /out/pylib/ 2>/dev/null || true \
- && printf '%s\n' '#!/usr/bin/env bash' \
-      'DIR="$(cd "$(dirname "$0")/.." && pwd)"' \
+# Pinned release versions (override with --build-arg if needed)
+ARG NAABU_VER=2.6.1
+ARG NUCLEI_VER=3.11.0
+ARG DNSX_VER=1.3.0
+ARG FFUF_VER=2.2.1
+ARG GOWITNESS_VER=3.1.1
+ARG FEROX_VER=2.13.1
+ARG WHATWEB_VER=v0.5.5
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) PD_ARCH=amd64; FEROX_ARCH=x86_64; FFUF_ARCH=amd64; GOWIT_ARCH=amd64 ;; \
+      arm64) PD_ARCH=arm64; FEROX_ARCH=aarch64; FFUF_ARCH=arm64; GOWIT_ARCH=arm64 ;; \
+      *) echo "unsupported arch: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/scanners/bin /opt/scanners/wordlists /opt/scanners/nuclei-templates /opt/scanners/pylib; \
+    \
+    curl -fsSL -o naabu.zip \
+      "https://github.com/projectdiscovery/naabu/releases/download/v${NAABU_VER}/naabu_${NAABU_VER}_linux_${PD_ARCH}.zip"; \
+    unzip -j -o naabu.zip naabu -d /opt/scanners/bin; \
+    \
+    curl -fsSL -o nuclei.zip \
+      "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VER}/nuclei_${NUCLEI_VER}_linux_${PD_ARCH}.zip"; \
+    unzip -j -o nuclei.zip nuclei -d /opt/scanners/bin; \
+    \
+    curl -fsSL -o dnsx.zip \
+      "https://github.com/projectdiscovery/dnsx/releases/download/v${DNSX_VER}/dnsx_${DNSX_VER}_linux_${PD_ARCH}.zip"; \
+    unzip -j -o dnsx.zip dnsx -d /opt/scanners/bin; \
+    \
+    curl -fsSL -o ffuf.tar.gz \
+      "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VER}/ffuf_${FFUF_VER}_linux_${FFUF_ARCH}.tar.gz"; \
+    tar -xzf ffuf.tar.gz -C /opt/scanners/bin ffuf; \
+    \
+    curl -fsSL -o gowitness \
+      "https://github.com/sensepost/gowitness/releases/download/${GOWITNESS_VER}/gowitness-${GOWITNESS_VER}-linux-${GOWIT_ARCH}"; \
+    install -m 0755 gowitness /opt/scanners/bin/gowitness; \
+    \
+    curl -fsSL -o ferox.zip \
+      "https://github.com/epi052/feroxbuster/releases/download/v${FEROX_VER}/${FEROX_ARCH}-linux-feroxbuster.zip"; \
+    unzip -j -o ferox.zip feroxbuster -d /opt/scanners/bin; \
+    \
+    chmod +x /opt/scanners/bin/*; \
+    rm -rf /tmp/install/*
+
+# wafw00f — ship module + wrapper so PYTHONPATH=/opt/scanners/pylib works on the shared volume
+RUN pip3 install --no-cache-dir --break-system-packages wafw00f \
+ && SITE="$(python3 -c 'import site; print(site.getsitepackages()[0])')" \
+ && cp -a "$SITE"/wafw00f /opt/scanners/pylib/ \
+ && cp -a "$SITE"/wafw00f-*.dist-info /opt/scanners/pylib/ 2>/dev/null || true \
+ && printf '%s\n' '#!/bin/sh' \
+      'DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"' \
       'export PYTHONPATH="${DIR}/pylib:${PYTHONPATH:-}"' \
-      'exec python3 -m wafw00f "$@"' > /out/bin/wafw00f \
- && chmod +x /out/bin/wafw00f
+      'exec python3 -m wafw00f "$@"' > /opt/scanners/bin/wafw00f \
+ && chmod +x /opt/scanners/bin/wafw00f
 
-FROM ruby:3.3-slim-bookworm AS ruby-tools
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
- && gem install whatweb --no-document \
- && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /out/bin \
- && WHATWEB_BIN=$(find /usr/local/bundle /usr/local/bin -type f -name whatweb 2>/dev/null | head -1) \
- && if [ -n "$WHATWEB_BIN" ]; then cp "$WHATWEB_BIN" /out/bin/whatweb; \
-    else printf '%s\n' '#!/usr/bin/env bash' 'exec ruby -S whatweb "$@"' > /out/bin/whatweb; fi \
- && chmod +x /out/bin/whatweb
+# WhatWeb — not on RubyGems; install from GitHub + vendor gems onto the share volume
+RUN set -eux; \
+    curl -fsSL -o whatweb.tgz \
+      "https://github.com/urbanadventurer/WhatWeb/archive/refs/tags/${WHATWEB_VER}.tar.gz"; \
+    mkdir -p /opt/scanners/whatweb /opt/scanners/gems; \
+    tar -xzf whatweb.tgz -C /opt/scanners/whatweb --strip-components=1; \
+    gem install --no-document --install-dir /opt/scanners/gems addressable json ipaddr; \
+    printf '%s\n' '#!/bin/sh' \
+      'ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"' \
+      'export GEM_HOME="$ROOT/gems"' \
+      'export GEM_PATH="$ROOT/gems"' \
+      'exec ruby "$ROOT/whatweb/whatweb" "$@"' > /opt/scanners/bin/whatweb; \
+    chmod +x /opt/scanners/bin/whatweb /opt/scanners/whatweb/whatweb; \
+    rm -f whatweb.tgz; \
+    apt-get purge -y --auto-remove build-essential ruby-dev || true; \
+    rm -rf /var/lib/apt/lists/* /root/.cache /tmp/*
 
-FROM debian:bookworm-slim AS final
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates libpcap0.8 curl unzip python3 ruby \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/scanners/bin /opt/scanners/wordlists /opt/scanners/nuclei-templates /opt/scanners/pylib
-
-COPY --from=go-tools /go/bin/naabu /opt/scanners/bin/naabu
-COPY --from=go-tools /go/bin/nuclei /opt/scanners/bin/nuclei
-COPY --from=go-tools /go/bin/dnsx /opt/scanners/bin/dnsx
-COPY --from=go-tools /go/bin/ffuf /opt/scanners/bin/ffuf
-COPY --from=go-tools /go/bin/gowitness /opt/scanners/bin/gowitness
-COPY --from=rust-tools /usr/local/cargo/bin/feroxbuster /opt/scanners/bin/feroxbuster
-COPY --from=py-tools /out/bin/wafw00f /opt/scanners/bin/wafw00f
-COPY --from=py-tools /out/pylib/ /opt/scanners/pylib/
-COPY --from=ruby-tools /usr/local/bundle /usr/local/bundle
-COPY --from=ruby-tools /out/bin/whatweb /opt/scanners/bin/whatweb
-
+# Default wordlist used by ExternalToolRunner when present
 RUN printf '%s\n' \
       admin login api graphql swagger .env .git backup config dashboard portal \
       actuator health metrics swagger-ui robots.txt sitemap.xml wp-admin \
@@ -64,10 +100,10 @@ RUN printf '%s\n' \
 
 ENV PATH="/opt/scanners/bin:${PATH}"
 ENV PYTHONPATH="/opt/scanners/pylib:${PYTHONPATH}"
-ENV GEM_HOME="/usr/local/bundle"
-ENV BUNDLE_PATH="/usr/local/bundle"
 ENV SCANNER_TOOLS_PATH=/opt/scanners/bin
 
 COPY infrastructure/docker/scanners/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh /opt/scanners/bin/*
+
+VOLUME ["/shared"]
 ENTRYPOINT ["/entrypoint.sh"]
