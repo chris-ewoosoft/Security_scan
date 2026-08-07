@@ -9,7 +9,8 @@ public record StartWebsiteScanRequest(
     IReadOnlyList<string>? Tools = null,
     string? ReportType = null,
     StartScanAuthRequest? Auth = null,
-    StartScanSourceRequest? Source = null);
+    StartScanSourceRequest? Source = null,
+    ScanToolOptionsDto? ToolOptions = null);
 
 public record StartScanAuthRequest(
     string? Type = null,
@@ -97,7 +98,41 @@ public record ScanConfigurationDto(
     IReadOnlyList<string> Tools,
     string ReportType,
     ScanAuthDto? Auth = null,
-    ScanSourceDto? Source = null);
+    ScanSourceDto? Source = null,
+    ScanToolOptionsDto? ToolOptions = null);
+
+public record ScanToolOptionsDto(
+    NucleiToolOptionsDto? Nuclei = null,
+    NaabuToolOptionsDto? Naabu = null,
+    FeroxToolOptionsDto? Feroxbuster = null,
+    FfufToolOptionsDto? Ffuf = null);
+
+public record NucleiToolOptionsDto(
+    string? Profile = null,
+    string? Severity = null,
+    string? Tags = null,
+    string? ExposureTags = null,
+    int? Concurrency = null,
+    int? RateLimit = null,
+    int? TimeoutSeconds = null,
+    int? Retries = null,
+    int? MaxDurationSeconds = null);
+
+public record NaabuToolOptionsDto(
+    string? Ports = null,
+    int? Rate = null);
+
+public record FeroxToolOptionsDto(
+    int? Depth = null,
+    int? Threads = null,
+    int? TimeoutSeconds = null,
+    int? MaxDurationSeconds = null);
+
+public record FfufToolOptionsDto(
+    int? Threads = null,
+    int? TimeoutSeconds = null,
+    int? MaxDurationSeconds = null,
+    string? MatchCodes = null);
 
 /// <summary>Auth metadata returned to clients — never includes password.</summary>
 public record ScanAuthDto(
@@ -150,9 +185,79 @@ public static class WebsiteScanMappings
                 config.Tools,
                 config.ReportType,
                 ToAuthDto(config.Auth),
-                ToSourceDto(config.Source)),
+                ToSourceDto(config.Source),
+                ToToolOptionsDto(config.ToolOptions)),
             report,
             accessToken);
+    }
+
+    public static ScanToolOptionsDto? ToToolOptionsDto(ScanToolOptions? options)
+    {
+        if (options is null) return null;
+        options.Normalize();
+        return new ScanToolOptionsDto(
+            new NucleiToolOptionsDto(
+                options.Nuclei.Profile,
+                options.Nuclei.Severity,
+                options.Nuclei.Tags,
+                options.Nuclei.ExposureTags,
+                options.Nuclei.Concurrency,
+                options.Nuclei.RateLimit,
+                options.Nuclei.TimeoutSeconds,
+                options.Nuclei.Retries,
+                options.Nuclei.MaxDurationSeconds),
+            new NaabuToolOptionsDto(options.Naabu.Ports, options.Naabu.Rate),
+            new FeroxToolOptionsDto(
+                options.Feroxbuster.Depth,
+                options.Feroxbuster.Threads,
+                options.Feroxbuster.TimeoutSeconds,
+                options.Feroxbuster.MaxDurationSeconds),
+            new FfufToolOptionsDto(
+                options.Ffuf.Threads,
+                options.Ffuf.TimeoutSeconds,
+                options.Ffuf.MaxDurationSeconds,
+                options.Ffuf.MatchCodes));
+    }
+
+    public static ScanToolOptions? FromToolOptionsDto(ScanToolOptionsDto? dto)
+    {
+        if (dto is null) return ScanToolOptions.CreateDefault();
+        var options = new ScanToolOptions
+        {
+            Nuclei = new NucleiToolOptions
+            {
+                Profile = dto.Nuclei?.Profile ?? "balanced",
+                Severity = dto.Nuclei?.Severity ?? "medium,high,critical",
+                Tags = dto.Nuclei?.Tags,
+                ExposureTags = dto.Nuclei?.ExposureTags ?? "exposure,config,backup,token,key,file",
+                Concurrency = dto.Nuclei?.Concurrency ?? 25,
+                RateLimit = dto.Nuclei?.RateLimit ?? 150,
+                TimeoutSeconds = dto.Nuclei?.TimeoutSeconds ?? 8,
+                Retries = dto.Nuclei?.Retries ?? 1,
+                MaxDurationSeconds = dto.Nuclei?.MaxDurationSeconds ?? 120,
+            },
+            Naabu = new NaabuToolOptions
+            {
+                Ports = dto.Naabu?.Ports ?? NaabuToolOptions.CreateDefault().Ports,
+                Rate = dto.Naabu?.Rate ?? 200,
+            },
+            Feroxbuster = new FeroxToolOptions
+            {
+                Depth = dto.Feroxbuster?.Depth ?? 1,
+                Threads = dto.Feroxbuster?.Threads ?? 20,
+                TimeoutSeconds = dto.Feroxbuster?.TimeoutSeconds ?? 5,
+                MaxDurationSeconds = dto.Feroxbuster?.MaxDurationSeconds ?? 90,
+            },
+            Ffuf = new FfufToolOptions
+            {
+                Threads = dto.Ffuf?.Threads ?? 20,
+                TimeoutSeconds = dto.Ffuf?.TimeoutSeconds ?? 5,
+                MaxDurationSeconds = dto.Ffuf?.MaxDurationSeconds ?? 90,
+                MatchCodes = dto.Ffuf?.MatchCodes ?? "200,204,301,401,403",
+            },
+        };
+        options.Normalize();
+        return options;
     }
 
     public static ScanSourceDto? ToSourceDto(ScanSourceConfiguration? source)

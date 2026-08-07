@@ -48,6 +48,19 @@ window.SecurityPortalConfigure = (() => {
             <div data-role="tools-list" class="option-grid"></div>
           </section>
 
+          <section class="config-block" data-role="depth-block">
+            <div class="block-head">
+              <h2>${escapeHtml(t("config.depth"))}</h2>
+              <div class="preset-actions">
+                <button type="button" class="linkish" data-action="depth-quick">${escapeHtml(t("config.depthQuick"))}</button>
+                <button type="button" class="linkish" data-action="depth-balanced">${escapeHtml(t("config.depthBalanced"))}</button>
+                <button type="button" class="linkish" data-action="depth-deep">${escapeHtml(t("config.depthDeep"))}</button>
+              </div>
+            </div>
+            <p class="muted config-preset-hint">${escapeHtml(t("config.depthHint"))}</p>
+            <div data-role="depth-panels" class="depth-panels"></div>
+          </section>
+
           <section class="config-block">
             <h2>${escapeHtml(t("config.reports"))}</h2>
             <div data-role="reports-list" class="report-list"></div>
@@ -64,6 +77,7 @@ window.SecurityPortalConfigure = (() => {
     const form = root.querySelector('[data-role="config-form"]');
     const checksList = root.querySelector('[data-role="checks-list"]');
     const toolsList = root.querySelector('[data-role="tools-list"]');
+    const depthPanels = root.querySelector('[data-role="depth-panels"]');
     const reportsList = root.querySelector('[data-role="reports-list"]');
     const formError = root.querySelector('[data-role="form-error"]');
     const saveBanner = root.querySelector('[data-role="save-banner"]');
@@ -74,6 +88,7 @@ window.SecurityPortalConfigure = (() => {
     let suppressToolSync = false;
     let saveTimer = null;
     let toolAvailability = null;
+    let toolOptionsState = ConfigStore.mergeToolOptions(ConfigStore.load().toolOptions);
 
     function applyCheckIds(ids) {
       const set = new Set(ids);
@@ -118,11 +133,147 @@ window.SecurityPortalConfigure = (() => {
     }
 
     function currentConfig() {
+      readDepthFromForm();
       return {
         checks: selectedValues("checks"),
         tools: selectedValues("tools"),
         reportType: (form.querySelector('input[name="reportType"]:checked') || {}).value || ConfigStore.FALLBACK.reportType,
+        toolOptions: toolOptionsState,
       };
+    }
+
+    function readDepthFromForm() {
+      if (!depthPanels) return;
+      const g = (name) => depthPanels.querySelector(`[name="${name}"]`);
+      const num = (name, fallback) => {
+        const el = g(name);
+        const n = el ? Number(el.value) : NaN;
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const str = (name, fallback) => {
+        const el = g(name);
+        return el ? String(el.value || "").trim() : fallback;
+      };
+      toolOptionsState = ConfigStore.mergeToolOptions({
+        nuclei: {
+          profile: str("nuclei.profile", "balanced"),
+          severity: str("nuclei.severity", "medium,high,critical"),
+          tags: str("nuclei.tags", ""),
+          exposureTags: str("nuclei.exposureTags", "exposure,config,backup,token,key,file"),
+          concurrency: num("nuclei.concurrency", 25),
+          rateLimit: num("nuclei.rateLimit", 150),
+          timeoutSeconds: num("nuclei.timeoutSeconds", 8),
+          retries: num("nuclei.retries", 1),
+          maxDurationSeconds: num("nuclei.maxDurationSeconds", 120),
+        },
+        naabu: {
+          ports: str("naabu.ports", ConfigStore.DEFAULT_TOOL_OPTIONS.naabu.ports),
+          rate: num("naabu.rate", 200),
+        },
+        feroxbuster: {
+          depth: num("feroxbuster.depth", 1),
+          threads: num("feroxbuster.threads", 20),
+          timeoutSeconds: num("feroxbuster.timeoutSeconds", 5),
+          maxDurationSeconds: num("feroxbuster.maxDurationSeconds", 90),
+        },
+        ffuf: {
+          threads: num("ffuf.threads", 20),
+          timeoutSeconds: num("ffuf.timeoutSeconds", 5),
+          maxDurationSeconds: num("ffuf.maxDurationSeconds", 90),
+          matchCodes: str("ffuf.matchCodes", "200,204,301,401,403"),
+        },
+      });
+    }
+
+    function selectedToolsSet() {
+      return new Set(selectedValues("tools"));
+    }
+
+    function renderDepthPanels() {
+      if (!depthPanels) return;
+      const selected = selectedToolsSet();
+      const o = toolOptionsState;
+      const showNuclei = selected.has("nuclei");
+      const showNaabu = selected.has("naabu");
+      const showFerox = selected.has("feroxbuster");
+      const showFfuf = selected.has("ffuf");
+
+      const field = (label, name, value, attrs = "") => `
+        <label class="depth-field">
+          <span>${escapeHtml(label)}</span>
+          <input name="${escapeHtml(name)}" value="${escapeHtml(String(value ?? ""))}" ${attrs} />
+        </label>`;
+
+      const select = (label, name, value, options) => `
+        <label class="depth-field">
+          <span>${escapeHtml(label)}</span>
+          <select name="${escapeHtml(name)}">
+            ${options.map(([v, lab]) =>
+              `<option value="${escapeHtml(v)}"${v === value ? " selected" : ""}>${escapeHtml(lab)}</option>`).join("")}
+          </select>
+        </label>`;
+
+      const panels = [];
+      if (showNuclei) {
+        panels.push(`
+          <details class="depth-panel" open>
+            <summary><strong>Nuclei</strong> — ${escapeHtml(t("config.depthNucleiSummary"))}</summary>
+            <div class="depth-grid">
+              ${select(t("config.nucleiProfile"), "nuclei.profile", o.nuclei.profile, [
+                ["quick", t("config.depthQuick")],
+                ["balanced", t("config.depthBalanced")],
+                ["deep", t("config.depthDeep")],
+              ])}
+              ${field(t("config.nucleiSeverity"), "nuclei.severity", o.nuclei.severity)}
+              ${field(t("config.nucleiTags"), "nuclei.tags", o.nuclei.tags, `placeholder="cve,misconfig,xss"`)}
+              ${field(t("config.nucleiExposureTags"), "nuclei.exposureTags", o.nuclei.exposureTags)}
+              ${field(t("config.nucleiConcurrency"), "nuclei.concurrency", o.nuclei.concurrency, `type="number" min="1" max="100"`)}
+              ${field(t("config.nucleiRate"), "nuclei.rateLimit", o.nuclei.rateLimit, `type="number" min="10" max="1000"`)}
+              ${field(t("config.nucleiTimeout"), "nuclei.timeoutSeconds", o.nuclei.timeoutSeconds, `type="number" min="3" max="30"`)}
+              ${field(t("config.nucleiRetries"), "nuclei.retries", o.nuclei.retries, `type="number" min="0" max="3"`)}
+              ${field(t("config.nucleiMaxDuration"), "nuclei.maxDurationSeconds", o.nuclei.maxDurationSeconds, `type="number" min="30" max="900"`)}
+            </div>
+            <p class="muted depth-note">${escapeHtml(t("config.nucleiNote"))}</p>
+          </details>`);
+      }
+      if (showNaabu) {
+        panels.push(`
+          <details class="depth-panel" open>
+            <summary><strong>Naabu</strong> — ${escapeHtml(t("config.depthNaabuSummary"))}</summary>
+            <div class="depth-grid">
+              ${field(t("config.naabuPorts"), "naabu.ports", o.naabu.ports)}
+              ${field(t("config.naabuRate"), "naabu.rate", o.naabu.rate, `type="number" min="10" max="5000"`)}
+            </div>
+          </details>`);
+      }
+      if (showFerox) {
+        panels.push(`
+          <details class="depth-panel" open>
+            <summary><strong>Feroxbuster</strong> — ${escapeHtml(t("config.depthFeroxSummary"))}</summary>
+            <div class="depth-grid">
+              ${field(t("config.feroxDepth"), "feroxbuster.depth", o.feroxbuster.depth, `type="number" min="0" max="4"`)}
+              ${field(t("config.feroxThreads"), "feroxbuster.threads", o.feroxbuster.threads, `type="number" min="1" max="100"`)}
+              ${field(t("config.feroxTimeout"), "feroxbuster.timeoutSeconds", o.feroxbuster.timeoutSeconds, `type="number" min="2" max="30"`)}
+              ${field(t("config.feroxMaxDuration"), "feroxbuster.maxDurationSeconds", o.feroxbuster.maxDurationSeconds, `type="number" min="30" max="600"`)}
+            </div>
+          </details>`);
+      }
+      if (showFfuf) {
+        panels.push(`
+          <details class="depth-panel" open>
+            <summary><strong>FFUF</strong> — ${escapeHtml(t("config.depthFfufSummary"))}</summary>
+            <div class="depth-grid">
+              ${field(t("config.ffufThreads"), "ffuf.threads", o.ffuf.threads, `type="number" min="1" max="100"`)}
+              ${field(t("config.ffufTimeout"), "ffuf.timeoutSeconds", o.ffuf.timeoutSeconds, `type="number" min="2" max="30"`)}
+              ${field(t("config.ffufMaxDuration"), "ffuf.maxDurationSeconds", o.ffuf.maxDurationSeconds, `type="number" min="30" max="600"`)}
+              ${field(t("config.ffufMatchCodes"), "ffuf.matchCodes", o.ffuf.matchCodes)}
+            </div>
+          </details>`);
+      }
+
+      depthPanels.innerHTML = panels.length
+        ? panels.join("")
+        : `<p class="muted">${escapeHtml(t("config.depthNone"))}</p>`;
     }
 
     function showError(message) {
@@ -264,12 +415,22 @@ window.SecurityPortalConfigure = (() => {
       `).join("");
 
       applySavedSelection(saved);
+      renderDepthPanels();
     }
 
     const onChange = (event) => {
       const target = event.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      if (target.name === "checks" && !suppressToolSync) syncToolsFromChecks();
+      if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) return;
+      if (target.name === "checks" && !suppressToolSync) {
+        syncToolsFromChecks();
+        renderDepthPanels();
+      }
+      if (target.name === "tools") renderDepthPanels();
+      if (target.name === "nuclei.profile") {
+        readDepthFromForm();
+        toolOptionsState = ConfigStore.applyDepthProfile(target.value, toolOptionsState);
+        renderDepthPanels();
+      }
       schedulePersist();
     };
 
@@ -288,6 +449,8 @@ window.SecurityPortalConfigure = (() => {
           form.querySelectorAll('input[name="reportType"]').forEach((el) => { el.checked = false; });
           technical.checked = true;
         }
+        toolOptionsState = ConfigStore.applyDepthProfile("balanced", toolOptionsState);
+        renderDepthPanels();
         persist(t("config.savedMax"));
         return;
       }
@@ -299,6 +462,14 @@ window.SecurityPortalConfigure = (() => {
       if (action === "preset-all") {
         applyCheckIds((catalog.checks || []).map((c) => c.id));
         persist(t("config.savedAll"));
+        return;
+      }
+      if (action === "depth-quick" || action === "depth-balanced" || action === "depth-deep") {
+        const profile = action.replace("depth-", "");
+        readDepthFromForm();
+        toolOptionsState = ConfigStore.applyDepthProfile(profile, toolOptionsState);
+        renderDepthPanels();
+        persist(t("config.savedDepth", { profile }));
         return;
       }
       if (action === "save") {
@@ -314,6 +485,7 @@ window.SecurityPortalConfigure = (() => {
         if (!res.ok) throw new Error(t("config.catalogError"));
         catalog = await res.json();
         const saved = ConfigStore.load();
+        toolOptionsState = ConfigStore.mergeToolOptions(saved.toolOptions);
         renderCatalog(saved);
         refreshToolsStatus();
         saveBanner.hidden = false;

@@ -1344,6 +1344,67 @@ body.page-config .topbar {
   color: #b45309;
 }
 
+.depth-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.depth-panel {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem 0.85rem;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.depth-panel summary {
+  cursor: pointer;
+  font-size: 0.92rem;
+  list-style: none;
+}
+
+.depth-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.depth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem 0.85rem;
+  margin-top: 0.75rem;
+}
+
+.depth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.depth-field input,
+.depth-field select {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink, #0f172a);
+  padding: 0.4rem 0.5rem;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.depth-note {
+  margin: 0.65rem 0 0;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 720px) {
+  .depth-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .muted {
   color: var(--muted);
 }

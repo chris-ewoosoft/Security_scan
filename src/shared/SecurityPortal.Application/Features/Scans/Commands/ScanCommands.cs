@@ -11,7 +11,8 @@ public record StartWebsiteScanCommand(
     Guid? UserId = null,
     Guid? OrganizationId = null,
     StartScanAuthRequest? Auth = null,
-    StartScanSourceRequest? Source = null) : IRequest<WebsiteScanDto>;
+    StartScanSourceRequest? Source = null,
+    ScanToolOptionsDto? ToolOptions = null) : IRequest<WebsiteScanDto>;
 
 public record DeleteWebsiteScansCommand(
     IReadOnlyList<Guid> Ids,

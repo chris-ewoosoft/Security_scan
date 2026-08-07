@@ -59,6 +59,21 @@ public static class ExternalToolRunner
         try
         {
             var fileName = ResolveToolPath(toolName);
+            // Built-in catalog tools are always "available".
+            if (!fileName.Contains(Path.DirectorySeparatorChar) && !fileName.Contains(Path.AltDirectorySeparatorChar)
+                && !fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                && toolName.Equals(fileName, StringComparison.OrdinalIgnoreCase)
+                && ScanCatalog.Tools.Any(t =>
+                    t.Id.Equals(toolName, StringComparison.OrdinalIgnoreCase)
+                    && t.Kind.Equals("Built-in", StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            if (fileName.Contains(Path.DirectorySeparatorChar) || fileName.Contains(Path.AltDirectorySeparatorChar))
+            {
+                if (!File.Exists(fileName))
+                    return false;
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = fileName,
@@ -71,16 +86,33 @@ public static class ExternalToolRunner
             ApplyToolEnvironment(psi);
             using var p = Process.Start(psi);
             if (p is null) return false;
-            if (!p.WaitForExit(4000))
+            // Drain pipes to avoid rare deadlocks when banners fill the buffer.
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(8000))
             {
                 try { p.Kill(true); } catch { /* ignore */ }
-                return false;
+                // Binary exists — treat as available; version probe may hang on first run.
+                return File.Exists(fileName);
             }
-            return p.ExitCode is 0 or 1 or 2;
+            _ = stdoutTask.GetAwaiter().GetResult();
+            _ = stderrTask.GetAwaiter().GetResult();
+            if (p.ExitCode is 0 or 1 or 2)
+                return true;
+            // Some CLIs return non-zero for -h/-version but are still runnable.
+            return File.Exists(fileName);
         }
         catch
         {
-            return false;
+            try
+            {
+                var path = ResolveToolPath(toolName);
+                return path.Contains(Path.DirectorySeparatorChar) && File.Exists(path);
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 
@@ -195,29 +227,57 @@ public static class ExternalToolRunner
         }
     }
 
-    public static async Task<ToolRunResult?> TryNaabuAsync(string host, IEnumerable<int> ports, CancellationToken ct)
+    public static async Task<ToolRunResult?> TryNaabuAsync(
+        string host, IEnumerable<int> ports, CancellationToken ct, NaabuToolOptions? options = null)
     {
         if (!IsAvailable("naabu")) return null;
+        options ??= NaabuToolOptions.CreateDefault();
+        options.Normalize();
         var portList = string.Join(",", ports);
-        var args = $"-host {Quote(host)} -p {portList} -silent -json -rate 200";
+        var args = $"-host {Quote(host)} -p {portList} -silent -json -rate {options.Rate}";
         return await RunAsync("naabu", args, TimeSpan.FromSeconds(45), ct);
     }
 
-    public static async Task<ToolRunResult?> TryNucleiAsync(string targetUrl, CancellationToken ct, string? extraArgs = null)
+    public static async Task<ToolRunResult?> TryNucleiAsync(
+        string targetUrl, CancellationToken ct, string? extraArgs = null, NucleiToolOptions? options = null)
     {
         if (!IsAvailable("nuclei")) return null;
+        options ??= NucleiToolOptions.CreateDefault();
+        options.Normalize();
         var templates = Environment.GetEnvironmentVariable("NUCLEI_TEMPLATES_PATH");
         var templateArg = !string.IsNullOrWhiteSpace(templates) && Directory.Exists(templates)
             ? $" -t {Quote(templates)}"
             : "";
+        var tagsArg = string.IsNullOrWhiteSpace(options.Tags) ? "" : $" -tags {Quote(options.Tags)}";
         var extra = string.IsNullOrWhiteSpace(extraArgs) ? "" : " " + extraArgs.Trim();
         var args =
-            $"-u {Quote(targetUrl)} -silent -jsonl -severity medium,high,critical -c 25 -timeout 8 -retries 1{templateArg}{extra}";
-        return await RunAsync("nuclei", args, TimeSpan.FromSeconds(120), ct);
+            $"-u {Quote(targetUrl)} -silent -jsonl -severity {options.Severity} -c {options.Concurrency} -rl {options.RateLimit} -timeout {options.TimeoutSeconds} -retries {options.Retries}{templateArg}{tagsArg}{extra}";
+        return await RunAsync("nuclei", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
     }
 
-    public static async Task<ToolRunResult?> TryNucleiExposuresAsync(string targetUrl, CancellationToken ct) =>
-        await TryNucleiAsync(targetUrl, ct, "-tags exposure,config,backup,token,key,file");
+    public static async Task<ToolRunResult?> TryNucleiExposuresAsync(
+        string targetUrl, CancellationToken ct, NucleiToolOptions? options = null)
+    {
+        options ??= NucleiToolOptions.CreateDefault();
+        options.Normalize();
+        var exposure = new NucleiToolOptions
+        {
+            Profile = options.Profile,
+            Severity = options.Severity,
+            Tags = string.IsNullOrWhiteSpace(options.ExposureTags)
+                ? "exposure,config,backup,token,key,file"
+                : options.ExposureTags,
+            ExposureTags = options.ExposureTags,
+            Concurrency = options.Concurrency,
+            RateLimit = options.RateLimit,
+            TimeoutSeconds = options.TimeoutSeconds,
+            Retries = options.Retries,
+            MaxDurationSeconds = options.MaxDurationSeconds,
+        };
+        // Skip profile re-application of Tags; values already chosen.
+        exposure.Normalize();
+        return await TryNucleiAsync(targetUrl, ct, extraArgs: null, exposure);
+    }
 
     public static async Task<ToolRunResult?> TryDnsxAsync(string host, CancellationToken ct)
     {
@@ -264,23 +324,29 @@ public static class ExternalToolRunner
         return await RunAsync("whatweb", $"--color=never --log-json=- {Quote(targetUrl)}", TimeSpan.FromSeconds(45), ct);
     }
 
-    public static async Task<ToolRunResult?> TryFeroxAsync(string targetUrl, CancellationToken ct)
+    public static async Task<ToolRunResult?> TryFeroxAsync(
+        string targetUrl, CancellationToken ct, FeroxToolOptions? options = null)
     {
         if (!IsAvailable("feroxbuster")) return null;
+        options ??= FeroxToolOptions.CreateDefault();
+        options.Normalize();
         var wordlist = FindWordlist();
         var wl = wordlist is null ? "" : $" -w {Quote(wordlist)}";
-        var args = $"-u {Quote(targetUrl)} -q -t 20 -d 1 --timeout 5 -n --json{wl}";
-        return await RunAsync("feroxbuster", args, TimeSpan.FromSeconds(90), ct);
+        var args = $"-u {Quote(targetUrl)} -q -t {options.Threads} -d {options.Depth} --timeout {options.TimeoutSeconds} -n --json{wl}";
+        return await RunAsync("feroxbuster", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
     }
 
-    public static async Task<ToolRunResult?> TryFfufAsync(string targetUrl, CancellationToken ct)
+    public static async Task<ToolRunResult?> TryFfufAsync(
+        string targetUrl, CancellationToken ct, FfufToolOptions? options = null)
     {
         if (!IsAvailable("ffuf")) return null;
+        options ??= FfufToolOptions.CreateDefault();
+        options.Normalize();
         var wordlist = FindWordlist();
         if (wordlist is null) return null;
         var baseUrl = targetUrl.TrimEnd('/') + "/FUZZ";
-        var args = $"-u {Quote(baseUrl)} -w {Quote(wordlist)} -mc 200,204,301,401,403 -t 20 -timeout 5 -s";
-        return await RunAsync("ffuf", args, TimeSpan.FromSeconds(90), ct);
+        var args = $"-u {Quote(baseUrl)} -w {Quote(wordlist)} -mc {options.MatchCodes} -t {options.Threads} -timeout {options.TimeoutSeconds} -s";
+        return await RunAsync("ffuf", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
     }
 
     public static IReadOnlyList<string> ParseNaabuOpenPorts(string stdout)
@@ -383,8 +449,14 @@ public static class ExternalToolRunner
         return candidates.FirstOrDefault(File.Exists);
     }
 
-    private static string Quote(string value) =>
-        "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    private static string Quote(string value)
+    {
+        // Prefer unquoted tokens when safe — ProcessStartInfo.Arguments quoting differs across OSes.
+        if (value.Length > 0
+            && value.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_' or '/' or ':' or ',' or '=' or '?' or '&' or '%' or '#' or '@'))
+            return value;
+        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    }
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…";

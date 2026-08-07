@@ -183,6 +183,8 @@ public sealed class ScanConfiguration
     public string ReportType { get; set; } = ScanCatalog.DefaultReportType;
     public ScanAuthConfiguration? Auth { get; set; }
     public ScanSourceConfiguration? Source { get; set; }
+    /// <summary>Per-tool depth / intensity options (nuclei severity, ports, …).</summary>
+    public ScanToolOptions? ToolOptions { get; set; }
     /// <summary>SHA-256 hex of browser-held access token. Never store plaintext.</summary>
     public string? OwnerTokenHash { get; set; }
 
@@ -199,7 +201,8 @@ public sealed class ScanConfiguration
         {
             Checks = checks,
             Tools = tools,
-            ReportType = ScanCatalog.DefaultReportType
+            ReportType = ScanCatalog.DefaultReportType,
+            ToolOptions = ScanToolOptions.CreateDefault()
         };
     }
 
@@ -228,8 +231,168 @@ public sealed class ScanConfiguration
         if (string.IsNullOrWhiteSpace(ReportType) || !ScanCatalog.ValidReportIds.Contains(ReportType))
             throw new DomainException("Select a valid security report type.");
 
+        ToolOptions ??= ScanToolOptions.CreateDefault();
+        ToolOptions.Normalize();
         Auth?.Validate();
         Source?.Validate();
+    }
+}
+
+/// <summary>Configurable depth for external scanner CLIs.</summary>
+public sealed class ScanToolOptions
+{
+    public NucleiToolOptions Nuclei { get; set; } = NucleiToolOptions.CreateDefault();
+    public NaabuToolOptions Naabu { get; set; } = NaabuToolOptions.CreateDefault();
+    public FeroxToolOptions Feroxbuster { get; set; } = FeroxToolOptions.CreateDefault();
+    public FfufToolOptions Ffuf { get; set; } = FfufToolOptions.CreateDefault();
+
+    public static ScanToolOptions CreateDefault() => new();
+
+    public void Normalize()
+    {
+        Nuclei ??= NucleiToolOptions.CreateDefault();
+        Naabu ??= NaabuToolOptions.CreateDefault();
+        Feroxbuster ??= FeroxToolOptions.CreateDefault();
+        Ffuf ??= FfufToolOptions.CreateDefault();
+        Nuclei.Normalize();
+        Naabu.Normalize();
+        Feroxbuster.Normalize();
+        Ffuf.Normalize();
+    }
+}
+
+public sealed class NucleiToolOptions
+{
+    /// <summary>quick | balanced | deep — applies severity/tags/timeout presets unless overridden.</summary>
+    public string Profile { get; set; } = "balanced";
+    public string Severity { get; set; } = "medium,high,critical";
+    public string? Tags { get; set; }
+    public string ExposureTags { get; set; } = "exposure,config,backup,token,key,file";
+    public int Concurrency { get; set; } = 25;
+    public int RateLimit { get; set; } = 150;
+    public int TimeoutSeconds { get; set; } = 8;
+    public int Retries { get; set; } = 1;
+    public int MaxDurationSeconds { get; set; } = 120;
+
+    public static NucleiToolOptions CreateDefault() => new();
+
+    public void Normalize()
+    {
+        Profile = (Profile ?? "balanced").Trim().ToLowerInvariant();
+        if (Profile is not ("quick" or "balanced" or "deep"))
+            Profile = "balanced";
+
+        ApplyProfileDefaults();
+
+        Severity = string.IsNullOrWhiteSpace(Severity) ? "medium,high,critical" : Severity.Trim();
+        ExposureTags = string.IsNullOrWhiteSpace(ExposureTags)
+            ? "exposure,config,backup,token,key,file"
+            : ExposureTags.Trim();
+        Concurrency = Math.Clamp(Concurrency, 1, 100);
+        RateLimit = Math.Clamp(RateLimit, 10, 1000);
+        TimeoutSeconds = Math.Clamp(TimeoutSeconds, 3, 30);
+        Retries = Math.Clamp(Retries, 0, 3);
+        MaxDurationSeconds = Math.Clamp(MaxDurationSeconds, 30, 900);
+        if (!string.IsNullOrWhiteSpace(Tags))
+            Tags = Tags.Trim();
+    }
+
+    private void ApplyProfileDefaults()
+    {
+        // Only fill when caller left defaults / empty — profile drives depth.
+        switch (Profile)
+        {
+            case "quick":
+                if (Severity is "medium,high,critical" or "")
+                    Severity = "high,critical";
+                if (string.IsNullOrWhiteSpace(Tags))
+                    Tags = "cve,misconfig";
+                if (Concurrency == 25) Concurrency = 15;
+                if (TimeoutSeconds == 8) TimeoutSeconds = 5;
+                if (MaxDurationSeconds == 120) MaxDurationSeconds = 90;
+                if (RateLimit == 150) RateLimit = 100;
+                break;
+            case "balanced":
+                // Without tags, Nuclei walks the entire template pack and often hits MaxDuration.
+                if (string.IsNullOrWhiteSpace(Tags))
+                    Tags = "cve,misconfig";
+                if (MaxDurationSeconds == 120) MaxDurationSeconds = 240;
+                break;
+            case "deep":
+                if (Severity is "medium,high,critical" or "")
+                    Severity = "info,low,medium,high,critical";
+                if (string.IsNullOrWhiteSpace(Tags))
+                    Tags = "cve,misconfig,exposure,vuln,default-login,xss,sqli,rce";
+                if (Concurrency == 25) Concurrency = 40;
+                if (TimeoutSeconds == 8) TimeoutSeconds = 10;
+                if (MaxDurationSeconds == 120) MaxDurationSeconds = 300;
+                if (RateLimit == 150) RateLimit = 200;
+                if (Retries == 1) Retries = 2;
+                break;
+        }
+    }
+}
+
+public sealed class NaabuToolOptions
+{
+    public string Ports { get; set; } = "21,22,25,53,80,110,143,443,445,993,995,3306,3389,5432,6379,8080,8443";
+    public int Rate { get; set; } = 200;
+
+    public static NaabuToolOptions CreateDefault() => new();
+
+    public void Normalize()
+    {
+        Ports = string.IsNullOrWhiteSpace(Ports)
+            ? "21,22,25,53,80,110,143,443,445,993,995,3306,3389,5432,6379,8080,8443"
+            : Ports.Trim();
+        Rate = Math.Clamp(Rate, 10, 5000);
+    }
+
+    public IReadOnlyList<int> ParsePorts()
+    {
+        var list = new List<int>();
+        foreach (var part in Ports.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (int.TryParse(part, out var p) && p is > 0 and < 65536)
+                list.Add(p);
+        }
+        return list.Count > 0 ? list : CreateDefault().ParsePorts().ToList();
+    }
+}
+
+public sealed class FeroxToolOptions
+{
+    public int Depth { get; set; } = 1;
+    public int Threads { get; set; } = 20;
+    public int TimeoutSeconds { get; set; } = 5;
+    public int MaxDurationSeconds { get; set; } = 90;
+
+    public static FeroxToolOptions CreateDefault() => new();
+
+    public void Normalize()
+    {
+        Depth = Math.Clamp(Depth, 0, 4);
+        Threads = Math.Clamp(Threads, 1, 100);
+        TimeoutSeconds = Math.Clamp(TimeoutSeconds, 2, 30);
+        MaxDurationSeconds = Math.Clamp(MaxDurationSeconds, 30, 600);
+    }
+}
+
+public sealed class FfufToolOptions
+{
+    public int Threads { get; set; } = 20;
+    public int TimeoutSeconds { get; set; } = 5;
+    public int MaxDurationSeconds { get; set; } = 90;
+    public string MatchCodes { get; set; } = "200,204,301,401,403";
+
+    public static FfufToolOptions CreateDefault() => new();
+
+    public void Normalize()
+    {
+        Threads = Math.Clamp(Threads, 1, 100);
+        TimeoutSeconds = Math.Clamp(TimeoutSeconds, 2, 30);
+        MaxDurationSeconds = Math.Clamp(MaxDurationSeconds, 30, 600);
+        MatchCodes = string.IsNullOrWhiteSpace(MatchCodes) ? "200,204,301,401,403" : MatchCodes.Trim();
     }
 }
 

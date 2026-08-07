@@ -375,7 +375,13 @@
       reportType = ConfigStore.FALLBACK.reportType;
     }
 
-    return { checks, tools, reportType, updatedAt: loaded.updatedAt || null };
+    return {
+      checks,
+      tools,
+      reportType,
+      toolOptions: ConfigStore.mergeToolOptions(loaded.toolOptions),
+      updatedAt: loaded.updatedAt || null,
+    };
   }
 
   async function loadCatalog() {
@@ -395,7 +401,9 @@
       ? ` · ${t("snapshot.updated")} ${formatWhen(summary.updatedAt)}`
       : ` · ${t("snapshot.default")}`;
     configSummary.textContent =
-      `${summary.checkCount} ${t("snapshot.checks")} · ${summary.toolCount} ${t("snapshot.tools")} · ${summary.reportName}${updated}`;
+      `${summary.checkCount} ${t("snapshot.checks")} · ${summary.toolCount} ${t("snapshot.tools")} · ${summary.reportName}` +
+      (summary.depthProfile ? ` · Nuclei:${summary.depthProfile}` : "") +
+      `${updated}`;
   }
 
   function openReportPanel(scan) {
@@ -498,6 +506,9 @@
       };
       if (auth) body.auth = auth;
       if (source) body.source = source;
+      if (ConfigStore?.toApiToolOptions) {
+        body.toolOptions = ConfigStore.toApiToolOptions(config.toolOptions);
+      }
 
       const res = await apiFetch("/scans", {
         method: "POST",

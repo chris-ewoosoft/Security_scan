@@ -25,6 +25,7 @@ public class StartWebsiteScanCommandHandler(
         if (!string.IsNullOrWhiteSpace(request.ReportType))
             config.ReportType = request.ReportType;
 
+        config.ToolOptions = WebsiteScanMappings.FromToolOptionsDto(request.ToolOptions);
         config.Auth = BuildAuth(request.Auth);
         config.Source = BuildSource(request.Source);
 

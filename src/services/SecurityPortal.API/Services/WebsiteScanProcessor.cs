@@ -265,6 +265,9 @@ public sealed class WebsiteScanProcessor(
             if (needsAuthSession && config.Auth?.IsEnabled == true && !authenticated)
                 continue;
 
+            var toolOpts = config.ToolOptions ?? ScanToolOptions.CreateDefault();
+            toolOpts.Normalize();
+
             IEnumerable<ScanFindingDto> batch = check.Id switch
             {
                 "reachability" => EvaluateReachability(check, tools, targetUrl, response, sw.ElapsedMilliseconds),
@@ -274,10 +277,10 @@ public sealed class WebsiteScanProcessor(
                 "cookie-security" => EvaluateCookies(check, tools, targetUrl, setCookie, hasHttps),
                 "cors-policy" => EvaluateCors(check, tools, targetUrl, corsOrigin),
                 "information-disclosure" => EvaluateDisclosure(check, tools, targetUrl, headers, server, poweredBy),
-                "port-scan" => await EvaluatePortScanAsync(check, tools, targetUrl, cancellationToken),
-                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, cancellationToken),
-                "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, cancellationToken),
-                "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, cancellationToken),
+                "port-scan" => await EvaluatePortScanAsync(check, tools, targetUrl, toolOpts.Naabu, cancellationToken),
+                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, toolOpts, cancellationToken),
+                "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, toolOpts.Nuclei, cancellationToken),
+                "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, toolOpts.Nuclei, cancellationToken),
                 "technology-detection" => await EvaluateTechnologyAsync(check, tools, headers, server, poweredBy, targetUrl, cancellationToken),
                 "screenshot" => await EvaluateScreenshotAsync(check, tools, targetUrl, cancellationToken),
                 "dns-security" => await EvaluateDnsAsync(check, tools, targetUrl, cancellationToken),
@@ -1503,17 +1506,18 @@ public sealed class WebsiteScanProcessor(
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluatePortScanAsync(
-        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
+        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, NaabuToolOptions naabuOpts, CancellationToken cancellationToken)
     {
         var host = new Uri(targetUrl).Host;
         ScanHostSafety.EnsureSafeHost(host, "Port-scan host");
-        var ports = new[] { 21, 22, 25, 53, 80, 110, 143, 443, 445, 993, 995, 3306, 3389, 5432, 6379, 8080, 8443 };
+        naabuOpts.Normalize();
+        var ports = naabuOpts.ParsePorts().ToArray();
         var open = new List<int>();
         var toolUsed = "tcp-probe";
 
         if (tools.Contains("naabu", StringComparer.OrdinalIgnoreCase))
         {
-            var naabu = await ExternalToolRunner.TryNaabuAsync(host, ports, cancellationToken);
+            var naabu = await ExternalToolRunner.TryNaabuAsync(host, ports, cancellationToken, naabuOpts);
             if (naabu is { Ran: true })
             {
                 toolUsed = "naabu";
@@ -1561,12 +1565,12 @@ public sealed class WebsiteScanProcessor(
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDirectoryDiscoveryAsync(
-        HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
+        HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, ScanToolOptions toolOpts, CancellationToken cancellationToken)
     {
         // Prefer external discovery tools when selected and present on PATH.
         if (tools.Contains("feroxbuster", StringComparer.OrdinalIgnoreCase))
         {
-            var ferox = await ExternalToolRunner.TryFeroxAsync(targetUrl, cancellationToken);
+            var ferox = await ExternalToolRunner.TryFeroxAsync(targetUrl, cancellationToken, toolOpts.Feroxbuster);
             if (ferox is { Ran: true })
             {
                 var hits = ExternalToolRunner.ParseFeroxHits(ferox.StdOut);
@@ -1593,7 +1597,7 @@ public sealed class WebsiteScanProcessor(
 
         if (tools.Contains("ffuf", StringComparer.OrdinalIgnoreCase))
         {
-            var ffuf = await ExternalToolRunner.TryFfufAsync(targetUrl, cancellationToken);
+            var ffuf = await ExternalToolRunner.TryFfufAsync(targetUrl, cancellationToken, toolOpts.Ffuf);
             if (ffuf is { Ran: true })
             {
                 var hits = ExternalToolRunner.ParseFfufHits(ffuf.StdOut);
@@ -1680,13 +1684,13 @@ public sealed class WebsiteScanProcessor(
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateSensitiveFilesAsync(
-        HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
+        HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, NucleiToolOptions nucleiOpts, CancellationToken cancellationToken)
     {
         var findings = new List<ScanFindingDto>();
 
         if (tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase))
         {
-            var nuclei = await ExternalToolRunner.TryNucleiExposuresAsync(targetUrl, cancellationToken);
+            var nuclei = await ExternalToolRunner.TryNucleiExposuresAsync(targetUrl, cancellationToken, nucleiOpts);
             if (nuclei is { Ran: true })
             {
                 var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
@@ -1916,11 +1920,11 @@ public sealed class WebsiteScanProcessor(
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateVulnerabilityAsync(
-        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, CancellationToken cancellationToken)
+        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, NucleiToolOptions nucleiOpts, CancellationToken cancellationToken)
     {
         if (tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase))
         {
-            var nuclei = await ExternalToolRunner.TryNucleiAsync(targetUrl, cancellationToken);
+            var nuclei = await ExternalToolRunner.TryNucleiAsync(targetUrl, cancellationToken, options: nucleiOpts);
             if (nuclei is { Ran: true })
             {
                 var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
@@ -1929,19 +1933,31 @@ public sealed class WebsiteScanProcessor(
                     return
                     [
                         Finding(check, tools, "High", "vuln.nuclei.hits",
-                            P(("observed", $"Nuclei reported {count} finding(s). Sample: {Truncate(nuclei.Summary)}"),
+                            P(("observed", $"Nuclei ({nucleiOpts.Profile}) reported {count} finding(s). Sample: {Truncate(nuclei.Summary)}"),
                                 ("impact", "Template-based scanner detected exposures or CVEs."),
                                 ("targetUrl", targetUrl)),
-                            $"tool=nuclei; count={count}; exit={nuclei.ExitCode}")
+                            $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; count={count}; exit={nuclei.ExitCode}")
                     ];
                 }
 
                 return
                 [
                     Finding(check, tools, "Info", "vuln.nuclei.none",
-                        P(("observed", "Nuclei completed with no medium/high/critical hits."),
+                        P(("observed", $"Nuclei ({nucleiOpts.Profile}) completed with no hits for severity={nucleiOpts.Severity}."),
                             ("targetUrl", targetUrl)),
-                        $"tool=nuclei; exit={nuclei.ExitCode}")
+                        $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; exit={nuclei.ExitCode}")
+                ];
+            }
+
+            if (nuclei is { Ran: false })
+            {
+                return
+                [
+                    Finding(check, tools, "Info", "vuln.nuclei.error",
+                        P(("observed", $"Nuclei was present but did not complete: {Truncate(nuclei.Summary)}"),
+                            ("impact", "Vulnerability coverage may be incomplete until Nuclei runs successfully."),
+                            ("targetUrl", targetUrl)),
+                        $"tool=nuclei; ran=false; exit={nuclei.ExitCode}; err={Truncate(nuclei.StdErr)}")
                 ];
             }
         }

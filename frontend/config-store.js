@@ -1,6 +1,7 @@
 window.SecurityPortalConfig = (() => {
-  const STORAGE_KEY = "sp.scanConfig.v2";
-  const LEGACY_KEY = "sp.scanConfig.v1";
+  const STORAGE_KEY = "sp.scanConfig.v3";
+  const LEGACY_V2 = "sp.scanConfig.v2";
+  const LEGACY_V1 = "sp.scanConfig.v1";
 
   /** Max-detection profile — mirrors ScanCatalog EnabledByDefault / MaxDetectionCheckIds */
   const MAX_DETECTION_CHECKS = [
@@ -51,19 +52,112 @@ window.SecurityPortalConfig = (() => {
     "fingerprint",
   ];
 
+  const DEFAULT_TOOL_OPTIONS = {
+      nuclei: {
+        profile: "balanced",
+        severity: "medium,high,critical",
+        tags: "cve,misconfig",
+        exposureTags: "exposure,config,backup,token,key,file",
+        concurrency: 25,
+        rateLimit: 150,
+        timeoutSeconds: 8,
+        retries: 1,
+        maxDurationSeconds: 240,
+      },
+    naabu: {
+      ports: "21,22,25,53,80,110,143,443,445,993,995,3306,3389,5432,6379,8080,8443",
+      rate: 200,
+    },
+    feroxbuster: {
+      depth: 1,
+      threads: 20,
+      timeoutSeconds: 5,
+      maxDurationSeconds: 90,
+    },
+    ffuf: {
+      threads: 20,
+      timeoutSeconds: 5,
+      maxDurationSeconds: 90,
+      matchCodes: "200,204,301,401,403",
+    },
+  };
+
+  const PROFILE_PRESETS = {
+    quick: {
+      nuclei: {
+        profile: "quick",
+        severity: "high,critical",
+        tags: "cve,misconfig",
+        exposureTags: "exposure,config,backup",
+        concurrency: 15,
+        rateLimit: 100,
+        timeoutSeconds: 5,
+        retries: 1,
+        maxDurationSeconds: 90,
+      },
+      feroxbuster: { depth: 0, threads: 15, timeoutSeconds: 4, maxDurationSeconds: 45 },
+      ffuf: { threads: 15, timeoutSeconds: 4, maxDurationSeconds: 45, matchCodes: "200,301,403" },
+    },
+    balanced: {
+      nuclei: { ...DEFAULT_TOOL_OPTIONS.nuclei },
+      feroxbuster: { ...DEFAULT_TOOL_OPTIONS.feroxbuster },
+      ffuf: { ...DEFAULT_TOOL_OPTIONS.ffuf },
+    },
+    deep: {
+      nuclei: {
+        profile: "deep",
+        severity: "info,low,medium,high,critical",
+        tags: "cve,misconfig,exposure,vuln,default-login,xss,sqli,rce",
+        exposureTags: "exposure,config,backup,token,key,file,secret,dotenv",
+        concurrency: 40,
+        rateLimit: 200,
+        timeoutSeconds: 10,
+        retries: 2,
+        maxDurationSeconds: 300,
+      },
+      feroxbuster: { depth: 2, threads: 40, timeoutSeconds: 8, maxDurationSeconds: 180 },
+      ffuf: { threads: 40, timeoutSeconds: 8, maxDurationSeconds: 180, matchCodes: "200,204,301,302,401,403" },
+      naabu: {
+        ports: "21,22,25,53,80,110,143,443,445,993,995,1433,1521,3306,3389,5432,5900,6379,8080,8443,9200,27017",
+        rate: 400,
+      },
+    },
+  };
+
   const FALLBACK = {
     checks: [...MAX_DETECTION_CHECKS],
     tools: [...MAX_DETECTION_TOOLS],
     reportType: "technical",
+    toolOptions: structuredClone(DEFAULT_TOOL_OPTIONS),
   };
+
+  function mergeToolOptions(raw) {
+    const base = structuredClone(DEFAULT_TOOL_OPTIONS);
+    if (!raw || typeof raw !== "object") return base;
+    for (const key of Object.keys(base)) {
+      if (raw[key] && typeof raw[key] === "object") {
+        base[key] = { ...base[key], ...raw[key] };
+      }
+    }
+    return base;
+  }
+
+  function applyDepthProfile(profile, current) {
+    const p = PROFILE_PRESETS[profile] || PROFILE_PRESETS.balanced;
+    const next = mergeToolOptions(current);
+    if (p.nuclei) next.nuclei = { ...next.nuclei, ...p.nuclei };
+    if (p.naabu) next.naabu = { ...next.naabu, ...p.naabu };
+    if (p.feroxbuster) next.feroxbuster = { ...next.feroxbuster, ...p.feroxbuster };
+    if (p.ffuf) next.ffuf = { ...next.ffuf, ...p.ffuf };
+    return next;
+  }
 
   function migrateLegacy() {
     try {
       if (localStorage.getItem(STORAGE_KEY)) return;
-      const legacy = localStorage.getItem(LEGACY_KEY);
-      if (!legacy) return;
-      const parsed = JSON.parse(legacy);
-      // Upgrade old baseline-only configs to max detection once.
+      const v2 = localStorage.getItem(LEGACY_V2) || localStorage.getItem(LEGACY_V1);
+      if (!v2) return;
+      const parsed = JSON.parse(v2);
       const onlyBaseline =
         Array.isArray(parsed.checks) &&
         parsed.checks.length <= 4 &&
@@ -74,6 +168,7 @@ window.SecurityPortalConfig = (() => {
             checks: parsed.checks?.length ? parsed.checks : [...FALLBACK.checks],
             tools: parsed.tools?.length ? parsed.tools : [...FALLBACK.tools],
             reportType: parsed.reportType || FALLBACK.reportType,
+            toolOptions: mergeToolOptions(parsed.toolOptions),
             updatedAt: parsed.updatedAt || new Date().toISOString(),
           };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -86,16 +181,29 @@ window.SecurityPortalConfig = (() => {
     migrateLegacy();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { ...FALLBACK, checks: [...FALLBACK.checks], tools: [...FALLBACK.tools] };
+      if (!raw) {
+        return {
+          ...FALLBACK,
+          checks: [...FALLBACK.checks],
+          tools: [...FALLBACK.tools],
+          toolOptions: structuredClone(DEFAULT_TOOL_OPTIONS),
+        };
+      }
       const parsed = JSON.parse(raw);
       return {
         checks: Array.isArray(parsed.checks) && parsed.checks.length ? parsed.checks : [...FALLBACK.checks],
         tools: Array.isArray(parsed.tools) && parsed.tools.length ? parsed.tools : [...FALLBACK.tools],
         reportType: parsed.reportType || FALLBACK.reportType,
+        toolOptions: mergeToolOptions(parsed.toolOptions),
         updatedAt: parsed.updatedAt || null,
       };
     } catch {
-      return { ...FALLBACK, checks: [...FALLBACK.checks], tools: [...FALLBACK.tools] };
+      return {
+        ...FALLBACK,
+        checks: [...FALLBACK.checks],
+        tools: [...FALLBACK.tools],
+        toolOptions: structuredClone(DEFAULT_TOOL_OPTIONS),
+      };
     }
   }
 
@@ -104,6 +212,7 @@ window.SecurityPortalConfig = (() => {
       checks: [...new Set(config.checks || [])],
       tools: [...new Set(config.tools || [])],
       reportType: config.reportType || FALLBACK.reportType,
+      toolOptions: mergeToolOptions(config.toolOptions),
       updatedAt: new Date().toISOString(),
     };
     if (!payload.checks.length) throw new Error("Checks trống — không lưu.");
@@ -120,12 +229,48 @@ window.SecurityPortalConfig = (() => {
       return found?.name || id;
     });
     const report = catalog?.reports?.find((r) => r.id === config.reportType);
+    const profile = config.toolOptions?.nuclei?.profile || "balanced";
     return {
       checkCount: config.checks?.length || 0,
       toolCount: config.tools?.length || 0,
       checkNames,
       reportName: report?.name || config.reportType,
+      depthProfile: profile,
       updatedAt: config.updatedAt,
+    };
+  }
+
+  /** Shape expected by API StartWebsiteScanRequest.toolOptions */
+  function toApiToolOptions(toolOptions) {
+    const o = mergeToolOptions(toolOptions);
+    return {
+      nuclei: {
+        profile: o.nuclei.profile,
+        severity: o.nuclei.severity,
+        tags: o.nuclei.tags || null,
+        exposureTags: o.nuclei.exposureTags,
+        concurrency: Number(o.nuclei.concurrency) || 25,
+        rateLimit: Number(o.nuclei.rateLimit) || 150,
+        timeoutSeconds: Number(o.nuclei.timeoutSeconds) || 8,
+        retries: Number(o.nuclei.retries) || 1,
+        maxDurationSeconds: Number(o.nuclei.maxDurationSeconds) || 120,
+      },
+      naabu: {
+        ports: o.naabu.ports,
+        rate: Number(o.naabu.rate) || 200,
+      },
+      feroxbuster: {
+        depth: Number(o.feroxbuster.depth) || 0,
+        threads: Number(o.feroxbuster.threads) || 20,
+        timeoutSeconds: Number(o.feroxbuster.timeoutSeconds) || 5,
+        maxDurationSeconds: Number(o.feroxbuster.maxDurationSeconds) || 90,
+      },
+      ffuf: {
+        threads: Number(o.ffuf.threads) || 20,
+        timeoutSeconds: Number(o.ffuf.timeoutSeconds) || 5,
+        maxDurationSeconds: Number(o.ffuf.maxDurationSeconds) || 90,
+        matchCodes: o.ffuf.matchCodes,
+      },
     };
   }
 
@@ -133,7 +278,11 @@ window.SecurityPortalConfig = (() => {
     load,
     save,
     summarize,
+    mergeToolOptions,
+    applyDepthProfile,
+    toApiToolOptions,
     FALLBACK,
+    DEFAULT_TOOL_OPTIONS,
     BASELINE_CHECKS,
     BASELINE_TOOLS,
     MAX_DETECTION_CHECKS,

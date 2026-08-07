@@ -20,8 +20,8 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     public IActionResult BuildInfo() => Ok(new
     {
         service = "SecurityPortal.API",
-        fix = "max-detection-presets; scanners-docker; MaxAutomaticRedirections-safe",
-        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.2",
+        fix = "tool-depth-options; max-detection-presets; scanners-docker; MaxAutomaticRedirections-safe",
+        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.3",
         allowAutoRedirect = false,
         maxAutomaticRedirections = ScanHttpClientFactory.DefaultMaxAutomaticRedirections,
         scannersPath = ExternalToolRunner.ToolsDirectory,
@@ -59,7 +59,8 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
             request.ReportType,
             userId,
             Auth: request.Auth,
-            Source: request.Source));
+            Source: request.Source,
+            ToolOptions: request.ToolOptions));
         return CreatedAtAction(nameof(GetById), new { id = result.Id, version = "1.0" }, result);
     }
 
