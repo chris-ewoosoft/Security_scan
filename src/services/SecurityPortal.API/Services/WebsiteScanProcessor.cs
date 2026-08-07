@@ -2397,12 +2397,17 @@ public sealed class WebsiteScanProcessor(
             var waf = await ExternalToolRunner.TryWafw00fAsync(targetUrl, cancellationToken);
             if (waf is { Ran: true } && !string.IsNullOrWhiteSpace(waf.StdOut + waf.StdErr))
             {
-                var text = (waf.StdOut + "\n" + waf.StdErr);
-                var found = text.Contains("is behind", StringComparison.OrdinalIgnoreCase)
-                            || text.Contains("WAF", StringComparison.OrdinalIgnoreCase);
+                var text = ExternalToolRunner.StripAnsi(waf.StdOut + "\n" + waf.StdErr);
+                var none = text.Contains("No WAF", StringComparison.OrdinalIgnoreCase)
+                           || text.Contains("is not behind a WAF", StringComparison.OrdinalIgnoreCase)
+                           || text.Contains("no WAF has been detected", StringComparison.OrdinalIgnoreCase);
+                var found = !none && (
+                    text.Contains("is behind a WAF", StringComparison.OrdinalIgnoreCase)
+                    || text.Contains("is behind", StringComparison.OrdinalIgnoreCase)
+                    || Regex.IsMatch(text, @"WAF\s*:\s*\S+", RegexOptions.IgnoreCase));
                 return
                 [
-                    Finding(check, tools, found ? "Info" : "Info",
+                    Finding(check, tools, "Info",
                         found ? "waf.found" : "waf.none",
                         P(("signals", Truncate(text))),
                         $"tool=wafw00f; {Truncate(text)}")

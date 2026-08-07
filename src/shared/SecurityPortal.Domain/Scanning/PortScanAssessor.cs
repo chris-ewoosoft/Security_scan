@@ -50,19 +50,21 @@ public static class PortScanAssessor
         var verifiedSensitive = verified.Where(SensitivePorts.Contains).ToList();
         var openSensitive = open.Where(SensitivePorts.Contains).ToList();
 
-        // Accept-all / tarpit: nearly every probed port accepts TCP with no service banners.
+        // Accept-all / tarpit: nearly every probed port accepts TCP, and no sensitive
+        // service was banner-verified (HTTP on 80/443 alone does not disprove tarpit).
         var acceptAll = tested.Count >= 5
                         && open.Count >= Math.Max(5, (int)Math.Ceiling(tested.Count * 0.8))
-                        && verified.Count == 0;
+                        && verifiedSensitive.Count == 0;
 
         if (acceptAll)
         {
+            var webBanners = verified.Where(CommonWebPorts.Contains).ToList();
             return new Assessment(
                 "Info",
                 "port.accept_all",
-                $"TCP connect succeeded on {open.Count}/{tested.Count} probed ports ({string.Join(", ", open)}) but no service banner was returned — likely firewall/load-balancer accept-all or tarpit, not confirmed services.",
+                $"TCP connect succeeded on {open.Count}/{tested.Count} probed ports ({string.Join(", ", open)}) without verified sensitive service banners — likely firewall/load-balancer accept-all or tarpit, not confirmed DB/RDP/SSH exposure.",
                 "Treat as unverified noise until banner/service probes confirm real listeners. Do not assume databases or RDP are exposed.",
-                evidence + "; verified=0; classification=accept_all");
+                evidence + $"; verified_sensitive=0; web_banners={webBanners.Count}; classification=accept_all");
         }
 
         if (verifiedSensitive.Count > 0)

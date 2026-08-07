@@ -21,6 +21,19 @@ public class PortScanAssessorTests
     }
 
     [Fact]
+    public void Accept_all_still_applies_when_only_web_banner_exists()
+    {
+        var tested = new[] { 21, 22, 25, 53, 80, 110, 143, 443, 445, 993, 995, 3306, 3389, 5432, 6379, 8080, 8443 };
+        var banners = tested.ToDictionary(p => p, _ => (string?)null);
+        banners[80] = "HTTP/1.0 200 OK";
+
+        var result = PortScanAssessor.Assess("example.com", tested, tested, "naabu", banners);
+
+        result.Code.Should().Be("port.accept_all");
+        result.Severity.Should().Be("Info");
+    }
+
+    [Fact]
     public void Verified_sensitive_banner_is_high()
     {
         var open = new[] { 443, 3306 };

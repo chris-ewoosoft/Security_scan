@@ -608,6 +608,6 @@ public static class ExternalToolRunner
 
     private static readonly Regex AnsiRegex = new(@"\x1B\[[0-9;]*[A-Za-z]", RegexOptions.Compiled);
 
-    internal static string StripAnsi(string value) =>
+    public static string StripAnsi(string value) =>
         string.IsNullOrEmpty(value) ? value : AnsiRegex.Replace(value, string.Empty);
 }
