@@ -13,6 +13,8 @@ public record StartWebsiteScanCommand(
     StartScanAuthRequest? Auth = null,
     StartScanSourceRequest? Source = null) : IRequest<WebsiteScanDto>;
 
-public record DeleteWebsiteScansCommand(IReadOnlyList<Guid> Ids) : IRequest<DeleteWebsiteScansResultDto>;
+public record DeleteWebsiteScansCommand(
+    IReadOnlyList<Guid> Ids,
+    IReadOnlyDictionary<Guid, string>? AccessTokens = null) : IRequest<DeleteWebsiteScansResultDto>;
 
-public record CancelWebsiteScanCommand(Guid Id) : IRequest<WebsiteScanDto>;
+public record CancelWebsiteScanCommand(Guid Id, string? AccessToken = null) : IRequest<WebsiteScanDto>;

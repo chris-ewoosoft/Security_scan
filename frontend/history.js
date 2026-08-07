@@ -1,5 +1,13 @@
 window.SecurityPortalHistory = (() => {
-  const { apiFetch, statusClass, escapeHtml, formatWhen } = window.SecurityPortalApi;
+  const {
+    apiFetch,
+    statusClass,
+    escapeHtml,
+    formatWhen,
+    getAllScanAccessTokens,
+    getScanAccessToken,
+    forgetScanAccess,
+  } = window.SecurityPortalApi;
   const I18n = window.SecurityPortalI18n;
   const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
 
@@ -88,7 +96,12 @@ window.SecurityPortalHistory = (() => {
       historyError.hidden = true;
       showStatus("");
       try {
-        const res = await apiFetch("/scans?take=50", { headers: { Accept: "application/json" } });
+        const tokens = getAllScanAccessTokens();
+        const res = await apiFetch("/scans/history", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ tokens }),
+        });
         if (!res.ok) throw new Error(`${t("history.loadError")} (HTTP ${res.status}).`);
         const items = await res.json();
         historyList.innerHTML = "";
@@ -156,13 +169,18 @@ window.SecurityPortalHistory = (() => {
       showStatus(t("history.deleting"));
 
       try {
+        const accessTokens = {};
+        ids.forEach((id) => {
+          const tok = getScanAccessToken(id);
+          if (tok) accessTokens[id] = tok;
+        });
         const res = await apiFetch("/scans", {
           method: "DELETE",
           headers: {
             "Content-Type": "application/json",
             Accept: "application/json",
           },
-          body: JSON.stringify({ ids }),
+          body: JSON.stringify({ ids, accessTokens }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -170,6 +188,7 @@ window.SecurityPortalHistory = (() => {
         }
 
         const deleted = data.deleted ?? ids.length;
+        forgetScanAccess(ids);
         showStatus(t("history.deleted", { count: deleted }));
         options.onDeleted?.(ids);
         if (ids.includes(activeScanId)) activeScanId = null;

@@ -1,4 +1,5 @@
 using MediatR;
+using SecurityPortal.Application.Common.Exceptions;
 using SecurityPortal.Application.Common.Interfaces;
 using SecurityPortal.Application.Features.Scans.Commands;
 using SecurityPortal.Application.Features.Scans.DTOs;
@@ -27,10 +28,13 @@ public class StartWebsiteScanCommandHandler(
         config.Auth = BuildAuth(request.Auth);
         config.Source = BuildSource(request.Source);
 
+        var accessToken = WebsiteScan.CreateOwnerToken();
+        config.OwnerTokenHash = WebsiteScan.HashOwnerToken(accessToken);
+
         var scan = WebsiteScan.Create(request.TargetUrl, config, request.UserId, request.OrganizationId);
         await scanRepository.AddAsync(scan, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return WebsiteScanMappings.ToDto(scan);
+        return WebsiteScanMappings.ToDto(scan, accessToken: accessToken);
     }
 
     private ScanSourceConfiguration? BuildSource(StartScanSourceRequest? source)
@@ -79,7 +83,19 @@ public class GetWebsiteScanQueryHandler(IWebsiteScanRepository scanRepository)
     {
         var scan = await scanRepository.GetByIdAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException(nameof(WebsiteScan), request.Id);
+
+        EnsureAccess(scan, request.AccessToken);
         return WebsiteScanMappings.ToDto(scan, request.Lang);
+    }
+
+    internal static void EnsureAccess(WebsiteScan scan, string? accessToken)
+    {
+        var hash = scan.GetConfiguration().OwnerTokenHash;
+        // Legacy rows without owner token remain readable by id (pre-hardening).
+        if (string.IsNullOrWhiteSpace(hash))
+            return;
+        if (!scan.MatchesOwnerToken(accessToken))
+            throw new ForbiddenAccessException("Scan access token is missing or invalid.");
     }
 }
 
@@ -90,8 +106,23 @@ public class ListRecentWebsiteScansQueryHandler(IWebsiteScanRepository scanRepos
         ListRecentWebsiteScansQuery request,
         CancellationToken cancellationToken)
     {
-        var scans = await scanRepository.GetRecentAsync(Math.Clamp(request.Take, 1, 50), cancellationToken);
-        return scans.Select(scan => WebsiteScanMappings.ToDto(scan, request.Lang)).ToList();
+        var tokens = request.AccessTokens ?? new Dictionary<Guid, string>();
+        if (tokens.Count == 0)
+            return [];
+
+        var ids = tokens.Keys.Take(Math.Clamp(request.Take, 1, 50)).ToList();
+        var scans = await scanRepository.GetByIdsAsync(ids, cancellationToken);
+        return scans
+            .Where(s =>
+            {
+                var hash = s.GetConfiguration().OwnerTokenHash;
+                if (string.IsNullOrWhiteSpace(hash))
+                    return tokens.ContainsKey(s.Id); // legacy
+                return tokens.TryGetValue(s.Id, out var t) && s.MatchesOwnerToken(t);
+            })
+            .OrderByDescending(s => s.CreatedAt)
+            .Select(scan => WebsiteScanMappings.ToDto(scan, request.Lang))
+            .ToList();
     }
 }
 
@@ -116,7 +147,23 @@ public class DeleteWebsiteScansCommandHandler(IWebsiteScanRepository scanReposit
         if (ids.Count == 0)
             return new DeleteWebsiteScansResultDto(0);
 
-        var deleted = await scanRepository.DeleteByIdsAsync(ids, cancellationToken);
+        var tokens = request.AccessTokens ?? new Dictionary<Guid, string>();
+        var scans = await scanRepository.GetByIdsAsync(ids, cancellationToken);
+        var allowed = scans
+            .Where(s =>
+            {
+                var hash = s.GetConfiguration().OwnerTokenHash;
+                if (string.IsNullOrWhiteSpace(hash))
+                    return false; // legacy: refuse anonymous delete without token era
+                return tokens.TryGetValue(s.Id, out var t) && s.MatchesOwnerToken(t);
+            })
+            .Select(s => s.Id)
+            .ToList();
+
+        if (allowed.Count == 0)
+            return new DeleteWebsiteScansResultDto(0);
+
+        var deleted = await scanRepository.DeleteByIdsAsync(allowed, cancellationToken);
         return new DeleteWebsiteScansResultDto(deleted);
     }
 }
@@ -131,13 +178,14 @@ public class CancelWebsiteScanCommandHandler(
         var scan = await scanRepository.GetByIdAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException(nameof(WebsiteScan), request.Id);
 
+        GetWebsiteScanQueryHandler.EnsureAccess(scan, request.AccessToken);
+
         if (scan.Status == ScanStatus.Cancelled)
             return WebsiteScanMappings.ToDto(scan);
 
         if (scan.Status is ScanStatus.Completed or ScanStatus.Failed)
             throw new DomainException("Only queued or running scans can be stopped.");
 
-        // Abort in-flight work first so HTTP/TCP loops stop promptly.
         abortSignal.Abort(request.Id);
 
         await scanRepository.TryCancelAsync(
@@ -148,7 +196,6 @@ public class CancelWebsiteScanCommandHandler(
         var refreshed = await scanRepository.GetByIdAsNoTrackingAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException(nameof(WebsiteScan), request.Id);
 
-        // Processor may have persisted Cancelled after Abort; treat as success.
         if (refreshed.Status == ScanStatus.Cancelled)
             return WebsiteScanMappings.ToDto(refreshed);
 

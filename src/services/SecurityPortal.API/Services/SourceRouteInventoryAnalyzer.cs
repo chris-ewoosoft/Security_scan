@@ -175,7 +175,8 @@ public static partial class SourceRouteInventoryAnalyzer
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Source inventory failed for scan {ScanId}", scanId);
+            logger.LogWarning("Source inventory failed for scan {ScanId}: {Safe}",
+                scanId, ScanSecretSanitizer.Sanitize(ex.Message, token));
             var safe = ScanSecretSanitizer.Sanitize(ex.Message, token);
             return new InventoryResult(
             [

@@ -36,17 +36,17 @@ window.SecurityPortalIntroduce = (() => {
       <div class="introduce-check-group">
         <p class="introduce-check-group-label">Mạng &amp; Hạ tầng</p>
         <ul>
-          <li><strong>Port Scan</strong> — Quét cổng mở (Naabu)</li>
-          <li><strong>DNS Security</strong> — Bản ghi DNS A/AAAA/CNAME (dnsx)</li>
-          <li><strong>WAF Detection</strong> — Phát hiện Web Application Firewall (wafw00f)</li>
+          <li><strong>Port Scan</strong> — Quét cổng (Naabu nếu có trên PATH, không thì TCP probe)</li>
+          <li><strong>DNS Security</strong> — Resolve DNS (dnsx nếu có)</li>
+          <li><strong>WAF Detection</strong> — Fingerprint WAF (wafw00f nếu có)</li>
         </ul>
         <p class="introduce-check-group-label">Khám phá &amp; Tình báo</p>
         <ul>
-          <li><strong>Directory Discovery</strong> — Đường dẫn / thư mục ẩn (Feroxbuster, FFUF)</li>
-          <li><strong>Sensitive File Scan</strong> — File <code>.env</code>, backup, git (Nuclei)</li>
-          <li><strong>Technology Detection</strong> — CMS / framework / JS stack (WhatWeb, Wappalyzer)</li>
-          <li><strong>Screenshot</strong> — Chụp ảnh trang đích (Gowitness + MinIO)</li>
-          <li><strong>Vulnerability Scan</strong> — CVE, misconfiguration (Nuclei templates)</li>
+          <li><strong>Directory Discovery</strong> — Wordlist tích hợp; Feroxbuster / FFUF nếu có</li>
+          <li><strong>Sensitive File Scan</strong> — File <code>.env</code>, backup, git</li>
+          <li><strong>Technology Detection</strong> — Suy luận stack từ header</li>
+          <li><strong>Screenshot</strong> — Gowitness nếu có trên PATH</li>
+          <li><strong>Vulnerability Scan</strong> — Nuclei nếu có; không thì placeholder</li>
         </ul>
       </div>
     </div>
@@ -63,7 +63,7 @@ window.SecurityPortalIntroduce = (() => {
       </tbody>
     </table>
     <div class="introduce-risk-note">
-      <strong>Điểm rủi ro (Risk Score):</strong> 0–100 · High finding +25, Medium +12, Low +5.
+      <strong>Điểm rủi ro (Risk Score):</strong> 0–100 · điểm giảm dần theo số finding cùng severity; có High → tối thiểu 55.
       <br><span class="introduce-risk-scale">
         <span class="sev-low">Low &lt; 40</span>
         <span class="sev-medium">Medium 40–69</span>
@@ -110,8 +110,8 @@ window.SecurityPortalIntroduce = (() => {
       <li>
         <span class="introduce-step-num">5</span>
         <div>
-          <strong>Bắt đầu scan</strong> — Nhấn <em>Bắt đầu scan</em>. Trạng thái cập nhật tự động ở cột phải;
-          nhấn <em>Dừng scan</em> để hủy.
+          <strong>Bắt đầu scan</strong> — Nhấn <em>Bắt đầu scan</em>. Trình duyệt lưu access token để xem lại / dừng / xóa.
+          Trạng thái cập nhật ở cột phải; nhấn <em>Dừng scan</em> để hủy.
         </div>
       </li>
       <li>
@@ -184,17 +184,17 @@ window.SecurityPortalIntroduce = (() => {
       <div class="introduce-check-group">
         <p class="introduce-check-group-label">Network &amp; Infrastructure</p>
         <ul>
-          <li><strong>Port Scan</strong> — Open ports (Naabu)</li>
-          <li><strong>DNS Security</strong> — A/AAAA/CNAME records (dnsx)</li>
-          <li><strong>WAF Detection</strong> — Web Application Firewall detection (wafw00f)</li>
+          <li><strong>Port Scan</strong> — Open ports (Naabu if on PATH, else TCP probe)</li>
+          <li><strong>DNS Security</strong> — DNS resolve (dnsx if available)</li>
+          <li><strong>WAF Detection</strong> — WAF fingerprint (wafw00f if available)</li>
         </ul>
         <p class="introduce-check-group-label">Discovery &amp; Reconnaissance</p>
         <ul>
-          <li><strong>Directory Discovery</strong> — Hidden paths (Feroxbuster, FFUF)</li>
-          <li><strong>Sensitive File Scan</strong> — <code>.env</code>, backup, git files (Nuclei)</li>
-          <li><strong>Technology Detection</strong> — CMS / framework / JS stack (WhatWeb, Wappalyzer)</li>
-          <li><strong>Screenshot</strong> — Capture target page (Gowitness + MinIO)</li>
-          <li><strong>Vulnerability Scan</strong> — CVEs, misconfigurations (Nuclei templates)</li>
+          <li><strong>Directory Discovery</strong> — Built-in wordlist; Feroxbuster / FFUF if available</li>
+          <li><strong>Sensitive File Scan</strong> — <code>.env</code>, backup, git files</li>
+          <li><strong>Technology Detection</strong> — Stack signals from headers</li>
+          <li><strong>Screenshot</strong> — Gowitness if on PATH</li>
+          <li><strong>Vulnerability Scan</strong> — Nuclei if available; otherwise placeholder</li>
         </ul>
       </div>
     </div>
@@ -211,7 +211,7 @@ window.SecurityPortalIntroduce = (() => {
       </tbody>
     </table>
     <div class="introduce-risk-note">
-      <strong>Risk Score:</strong> 0–100 · High finding +25, Medium +12, Low +5.
+      <strong>Risk Score:</strong> 0–100 · diminishing returns per severity; any High floors at 55.
       <br><span class="introduce-risk-scale">
         <span class="sev-low">Low &lt; 40</span>
         <span class="sev-medium">Medium 40–69</span>
@@ -258,8 +258,8 @@ window.SecurityPortalIntroduce = (() => {
       <li>
         <span class="introduce-step-num">5</span>
         <div>
-          <strong>Start scan</strong> — Click <em>Start scan</em>. Status updates automatically in the
-          right column; click <em>Stop scan</em> to cancel.
+          <strong>Start scan</strong> — Click <em>Start scan</em>. The browser stores an access token for view / stop / delete.
+          Status updates in the right column; click <em>Stop scan</em> to cancel.
         </div>
       </li>
       <li>

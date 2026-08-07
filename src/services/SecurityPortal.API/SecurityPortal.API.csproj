@@ -26,4 +26,7 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
     <PackageReference Include="LibGit2Sharp" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="wordlists\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

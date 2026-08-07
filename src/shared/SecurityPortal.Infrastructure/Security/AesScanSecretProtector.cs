@@ -32,6 +32,16 @@ public sealed class AesScanSecretProtector : IScanSecretProtector
 
         if (_key.Length is not (16 or 24 or 32))
             _key = SHA256.HashData(_key);
+
+        var env = configuration["ASPNETCORE_ENVIRONMENT"]
+                  ?? configuration["DOTNET_ENVIRONMENT"]
+                  ?? "Production";
+        var isDev = env.Equals("Development", StringComparison.OrdinalIgnoreCase);
+        if (!isDev && string.IsNullOrWhiteSpace(configured))
+        {
+            throw new InvalidOperationException(
+                "ScanSecrets:Key must be configured in non-Development environments (do not rely on JWT/dev fallback).");
+        }
     }
 
     public string Protect(string plaintext)

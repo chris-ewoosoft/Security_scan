@@ -44,7 +44,9 @@ public record ScanToolDto(string Id, string Name, string Kind, string Descriptio
 
 public record ScanReportDto(string Id, string Name, string Description);
 
-public record DeleteWebsiteScansRequest(IReadOnlyList<Guid> Ids);
+public record DeleteWebsiteScansRequest(
+    IReadOnlyList<Guid> Ids,
+    Dictionary<Guid, string>? AccessTokens = null);
 
 public record DeleteWebsiteScansResultDto(int Deleted);
 
@@ -87,7 +89,8 @@ public record WebsiteScanDto(
     string? ServerHeader,
     string ReportType,
     ScanConfigurationDto Configuration,
-    ScanReportPayloadDto? Report);
+    ScanReportPayloadDto? Report,
+    string? AccessToken = null);
 
 public record ScanConfigurationDto(
     IReadOnlyList<string> Checks,
@@ -114,7 +117,7 @@ public record ScanSourceDto(
 
 public static class WebsiteScanMappings
 {
-    public static WebsiteScanDto ToDto(WebsiteScan scan, string? lang = null)
+    public static WebsiteScanDto ToDto(WebsiteScan scan, string? lang = null, string? accessToken = null)
     {
         var config = scan.GetConfiguration();
         ScanReportPayloadDto? report = null;
@@ -148,7 +151,8 @@ public static class WebsiteScanMappings
                 config.ReportType,
                 ToAuthDto(config.Auth),
                 ToSourceDto(config.Source)),
-            report);
+            report,
+            accessToken);
     }
 
     public static ScanSourceDto? ToSourceDto(ScanSourceConfiguration? source)

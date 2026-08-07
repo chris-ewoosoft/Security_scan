@@ -19,8 +19,9 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     public IActionResult BuildInfo() => Ok(new
     {
         service = "SecurityPortal.API",
-        fix = "cvmanager-graphql-discovery; explicit-MaxAutomaticRedirections-50",
-        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-06.4",
+        fix = "ssrf-manual-redirects; MaxAutomaticRedirections-must-not-be-0",
+        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.1",
+        allowAutoRedirect = false,
         maxAutomaticRedirections = ScanHttpClientFactory.DefaultMaxAutomaticRedirections,
         utc = DateTime.UtcNow
     });
@@ -54,28 +55,41 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
         return CreatedAtAction(nameof(GetById), new { id = result.Id, version = "1.0" }, result);
     }
 
-    /// <summary>Get scan status, configuration, and security report</summary>
+    /// <summary>Get scan status, configuration, and security report (requires X-Scan-Token for hardened scans)</summary>
     [AllowAnonymous]
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(WebsiteScanDto), 200)]
     [ProducesResponseType(404)]
+    [ProducesResponseType(403)]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var result = await Mediator.Send(new GetWebsiteScanQuery(id, Language));
+        var token = Request.Headers["X-Scan-Token"].FirstOrDefault();
+        var result = await Mediator.Send(new GetWebsiteScanQuery(id, Language, token));
         return Ok(result);
     }
 
-    /// <summary>List recent website scans</summary>
+    /// <summary>
+    /// List scans the caller owns. Pass JSON body or header X-Scan-Access:
+    /// {"tokens":{"guid":"token",...}} — empty tokens returns empty list (no global enumeration).
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("history")]
+    [ProducesResponseType(typeof(IReadOnlyList<WebsiteScanDto>), 200)]
+    public async Task<IActionResult> ListOwned([FromBody] ScanAccessListRequest? request, [FromQuery] int take = 50)
+    {
+        var tokens = ParseAccessTokens(request);
+        var result = await Mediator.Send(new ListRecentWebsiteScansQuery(take, Language, tokens));
+        return Ok(result);
+    }
+
+    /// <summary>Deprecated open list — returns empty to prevent IDOR enumeration.</summary>
     [AllowAnonymous]
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<WebsiteScanDto>), 200)]
-    public async Task<IActionResult> ListRecent([FromQuery] int take = 10)
-    {
-        var result = await Mediator.Send(new ListRecentWebsiteScansQuery(take, Language));
-        return Ok(result);
-    }
+    public Task<IActionResult> ListRecent([FromQuery] int take = 10) =>
+        Task.FromResult<IActionResult>(Ok(Array.Empty<WebsiteScanDto>()));
 
-    /// <summary>Delete one or more website scans from history</summary>
+    /// <summary>Delete owned scans (requires matching access tokens)</summary>
     [AllowAnonymous]
     [HttpDelete]
     [ProducesResponseType(typeof(DeleteWebsiteScansResultDto), 200)]
@@ -86,7 +100,8 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
         if (ids.Count == 0)
             return UnprocessableEntity(new { detail = "Chọn ít nhất một scan để xóa." });
 
-        var result = await Mediator.Send(new DeleteWebsiteScansCommand(ids));
+        var tokens = request?.AccessTokens ?? new Dictionary<Guid, string>();
+        var result = await Mediator.Send(new DeleteWebsiteScansCommand(ids, tokens));
         return Ok(result);
     }
 
@@ -98,7 +113,17 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     [ProducesResponseType(422)]
     public async Task<IActionResult> Cancel(Guid id)
     {
-        var result = await Mediator.Send(new CancelWebsiteScanCommand(id));
+        var token = Request.Headers["X-Scan-Token"].FirstOrDefault();
+        var result = await Mediator.Send(new CancelWebsiteScanCommand(id, token));
         return Ok(result);
     }
+
+    private static IReadOnlyDictionary<Guid, string> ParseAccessTokens(ScanAccessListRequest? request)
+    {
+        if (request?.Tokens is { Count: > 0 })
+            return request.Tokens;
+        return new Dictionary<Guid, string>();
+    }
 }
+
+public record ScanAccessListRequest(Dictionary<Guid, string>? Tokens = null);

@@ -19,6 +19,7 @@ public class LoginCommandHandler(
     public async Task<AuthResponse> Handle(LoginCommand request, CancellationToken cancellationToken)
     {
         var lookupUser = await userRepository.GetByEmailAsync(request.Email, cancellationToken)
+            ?? await userRepository.GetByUsernameAsync(request.Email, cancellationToken)
             ?? throw new UnauthorizedAccessException("Invalid credentials.");
 
         var user = await userRepository.GetWithRolesAsync(lookupUser.Id, cancellationToken)

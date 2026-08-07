@@ -8,13 +8,16 @@
     escapeHtml,
     wrapReportLines,
     formatWhen,
+    rememberScanAccess,
+    getScanAccessToken,
+    forgetScanAccess,
   } = window.SecurityPortalApi;
   const ConfigStore = window.SecurityPortalConfig;
   const Configure = window.SecurityPortalConfigure;
   const HistoryPanel = window.SecurityPortalHistory;
   const I18n = window.SecurityPortalI18n;
   const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
-  const EXPECTED_BUILD_STAMP = "2026-08-06.4";
+  const EXPECTED_BUILD_STAMP = "2026-08-07.1";
   let apiBuildStamp = null;
 
   async function refreshApiBuildStamp() {
@@ -208,7 +211,10 @@
     try {
       const res = await apiFetch(`/scans/${encodeURIComponent(id)}/cancel`, {
         method: "POST",
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          ...(getScanAccessToken(id) ? { "X-Scan-Token": getScanAccessToken(id) } : {}),
+        },
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -503,6 +509,7 @@
         throw new Error(extractError(data) || `${t("home.scanStartFailed")} (HTTP ${res.status}).`);
       }
 
+      if (data.accessToken) rememberScanAccess(data.id, data.accessToken);
       openReportPanel(data);
       startPolling(data.id);
       setStopVisible(true);
@@ -538,19 +545,37 @@
     }
   });
 
+  let pollInFlight = false;
+  let pollAbort = null;
+
   async function refreshReport() {
     if (!activeScanId || activeScanId === "pending") return;
-    const res = await apiFetch(`/scans/${activeScanId}`, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`${t("report.loadFailed")} (HTTP ${res.status}).`);
-    const scan = await res.json();
-    lastScan = scan;
-    if (rightView === "report") renderReport(scan);
-    if (scan.status === "Completed" || scan.status === "Failed" || scan.status === "Cancelled") {
-      stopPolling();
-      scanProgressStartedAt = null;
-      scanBtn.disabled = false;
-      scanBtn.textContent = t("home.scan");
-      setStopVisible(false);
+    if (pollInFlight) return;
+    pollInFlight = true;
+    pollAbort?.abort();
+    pollAbort = new AbortController();
+    try {
+      const token = getScanAccessToken(activeScanId);
+      const res = await apiFetch(`/scans/${activeScanId}`, {
+        headers: {
+          Accept: "application/json",
+          ...(token ? { "X-Scan-Token": token } : {}),
+        },
+        signal: pollAbort.signal,
+      });
+      if (!res.ok) throw new Error(`${t("report.loadFailed")} (HTTP ${res.status}).`);
+      const scan = await res.json();
+      lastScan = scan;
+      if (rightView === "report") renderReport(scan);
+      if (scan.status === "Completed" || scan.status === "Failed" || scan.status === "Cancelled") {
+        stopPolling();
+        scanProgressStartedAt = null;
+        scanBtn.disabled = false;
+        scanBtn.textContent = t("home.scan");
+        setStopVisible(false);
+      }
+    } finally {
+      pollInFlight = false;
     }
   }
 
@@ -929,6 +954,9 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    pollAbort?.abort();
+    pollAbort = null;
+    pollInFlight = false;
     stopProgressTicker();
   }
 

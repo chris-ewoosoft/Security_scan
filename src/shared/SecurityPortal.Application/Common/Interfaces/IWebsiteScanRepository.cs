@@ -9,6 +9,7 @@ public interface IWebsiteScanRepository
     Task<WebsiteScan?> GetByIdAsNoTrackingAsync(Guid id, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<WebsiteScan>> GetQueuedAsync(int take, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<WebsiteScan>> GetRecentAsync(int take, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<WebsiteScan>> GetByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
     Task<int> DeleteByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
 
     /// <summary>Atomically mark Queued/Running scan as Cancelled. Returns false if not cancellable.</summary>

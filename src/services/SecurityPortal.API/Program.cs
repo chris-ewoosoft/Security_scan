@@ -96,7 +96,7 @@ builder.Services.AddSingleton<SecurityPortal.API.Services.ScanCancellationRegist
 builder.Services.AddSingleton<SecurityPortal.Application.Common.Interfaces.IScanAbortSignal, SecurityPortal.API.Services.ScanAbortSignal>();
 builder.Services.AddHostedService<SecurityPortal.API.Services.WebsiteScanProcessor>();
 
-var buildStamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-06.4";
+var buildStamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.1";
 builder.Logging.AddFilter("SecurityPortal.API", LogLevel.Information);
 
 var app = builder.Build();
