@@ -17,7 +17,7 @@
   const HistoryPanel = window.SecurityPortalHistory;
   const I18n = window.SecurityPortalI18n;
   const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
-  const EXPECTED_BUILD_STAMP = "2026-08-07.2";
+  const EXPECTED_BUILD_STAMP = "2026-08-07.5";
   let apiBuildStamp = null;
 
   async function refreshApiBuildStamp() {

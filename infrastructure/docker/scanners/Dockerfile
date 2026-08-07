@@ -64,15 +64,18 @@ RUN set -eux; \
     rm -rf /tmp/install/*
 
 # wafw00f — ship module + wrapper so PYTHONPATH=/opt/scanners/pylib works on the shared volume
-RUN pip3 install --no-cache-dir --break-system-packages wafw00f \
- && SITE="$(python3 -c 'import site; print(site.getsitepackages()[0])')" \
- && cp -a "$SITE"/wafw00f /opt/scanners/pylib/ \
- && cp -a "$SITE"/wafw00f-*.dist-info /opt/scanners/pylib/ 2>/dev/null || true \
+RUN pip3 install --no-cache-dir --break-system-packages --target /opt/scanners/pylib wafw00f \
  && printf '%s\n' '#!/bin/sh' \
       'DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"' \
       'export PYTHONPATH="${DIR}/pylib:${PYTHONPATH:-}"' \
-      'exec python3 -m wafw00f "$@"' > /opt/scanners/bin/wafw00f \
- && chmod +x /opt/scanners/bin/wafw00f
+      'if [ -x "${DIR}/pylib/bin/wafw00f" ]; then exec "${DIR}/pylib/bin/wafw00f" "$@"; fi' \
+      'exec python3 - "$@" <<'"'"'PY'"'" \
+      'import sys' \
+      'from wafw00f.main import main' \
+      'sys.argv = ["wafw00f", *sys.argv[1:]]' \
+      'raise SystemExit(main())' \
+      'PY' > /opt/scanners/bin/wafw00f \
+ && chmod +x /opt/scanners/bin/wafw00f /opt/scanners/pylib/bin/wafw00f 2>/dev/null || chmod +x /opt/scanners/bin/wafw00f
 
 # WhatWeb — not on RubyGems; install from GitHub + vendor gems onto the share volume
 RUN set -eux; \

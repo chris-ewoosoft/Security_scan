@@ -9,6 +9,7 @@ using SecurityPortal.Application.Common.Interfaces;
 using SecurityPortal.Application.Features.Scans.DTOs;
 using SecurityPortal.Application.Features.Scans.Localization;
 using SecurityPortal.Domain.Entities;
+using SecurityPortal.Domain.Scanning;
 using SecurityPortal.Domain.Security;
 
 namespace SecurityPortal.API.Services;
@@ -254,6 +255,9 @@ public sealed class WebsiteScanProcessor(
         findings.AddRange(sourceFindings);
         findings.AddRange(authFindings);
 
+        // Secondary API/GraphQL hosts (Clever-style backends, cookie domains) for Nuclei/Ferox/FFUF.
+        var secondaryTargets = BuildSecondaryScanTargets(handler, targetUrl);
+
         // Prefer CVE/misconfig Nuclei before exposure scan so the larger budget is not spent first.
         var checkList = selectedChecks.ToList();
         var orderedChecks = checkList
@@ -292,9 +296,9 @@ public sealed class WebsiteScanProcessor(
                 "cors-policy" => EvaluateCors(check, tools, targetUrl, corsOrigin),
                 "information-disclosure" => EvaluateDisclosure(check, tools, targetUrl, headers, server, poweredBy),
                 "port-scan" => await EvaluatePortScanAsync(check, tools, targetUrl, toolOpts.Naabu, cancellationToken),
-                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, toolOpts, cancellationToken),
-                "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, toolOpts.Nuclei, cancellationToken),
-                "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, toolOpts.Nuclei, cancellationToken),
+                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, secondaryTargets, toolOpts, cancellationToken),
+                "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, secondaryTargets, toolOpts.Nuclei, cancellationToken),
+                "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, secondaryTargets, toolOpts.Nuclei, cancellationToken),
                 "technology-detection" => await EvaluateTechnologyAsync(check, tools, headers, server, poweredBy, targetUrl, cancellationToken),
                 "screenshot" => await EvaluateScreenshotAsync(check, tools, targetUrl, cancellationToken),
                 "dns-security" => await EvaluateDnsAsync(check, tools, targetUrl, cancellationToken),
@@ -439,7 +443,8 @@ public sealed class WebsiteScanProcessor(
 
         if (sessionCookies.Count == 0)
         {
-            yield return Finding(AuthCheckDef, AuthCheckDef.Tools, "Medium", "auth.session.cookie_missing",
+            // SPA / GraphQL bearer flows often have no cookies — informational, not a Medium defect.
+            yield return Finding(AuthCheckDef, AuthCheckDef.Tools, "Info", "auth.session.cookie_missing",
                 P(("observed", "Authenticated session established but no cookies were present in the scanner jar."),
                     ("impact", "Session may rely only on bearer tokens in memory/localStorage — cookie-based authz probes may be incomplete."),
                     ("targetUrl", targetUrl)),
@@ -480,21 +485,11 @@ public sealed class WebsiteScanProcessor(
     private static List<string> DiscoverAuthenticatedApiBases(HttpClientHandler handler, string targetUrl)
     {
         var bases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var url in DiscoverHeuristicApiBases(targetUrl))
+            bases.Add(url);
+
         if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var target))
-            return [];
-
-        // Sibling Clever-style hosts commonly used after OIDC login.
-        if (target.Host.Contains("intro.", StringComparison.OrdinalIgnoreCase))
-        {
-            var graphHost = target.Host.Replace("intro.", "cvgraph2.", StringComparison.OrdinalIgnoreCase);
-            bases.Add($"{target.Scheme}://{graphHost}/graphql");
-        }
-
-        if (target.Host.Contains("cvmanager.", StringComparison.OrdinalIgnoreCase))
-        {
-            var backend = target.Host.Replace("cvmanager.", "cvmanager-backend.", StringComparison.OrdinalIgnoreCase);
-            bases.Add($"{target.Scheme}://{backend}/graphql");
-        }
+            return bases.Take(8).ToList();
 
         foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
         {
@@ -509,6 +504,92 @@ public sealed class WebsiteScanProcessor(
         }
 
         return bases.Take(8).ToList();
+    }
+
+    private static IEnumerable<string> DiscoverHeuristicApiBases(string targetUrl)
+    {
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var target))
+            yield break;
+
+        // Sibling Clever-style hosts commonly used after OIDC login.
+        if (target.Host.Contains("intro.", StringComparison.OrdinalIgnoreCase))
+        {
+            var graphHost = target.Host.Replace("intro.", "cvgraph2.", StringComparison.OrdinalIgnoreCase);
+            yield return $"{target.Scheme}://{graphHost}/graphql";
+        }
+
+        if (target.Host.Contains("cvmanager.", StringComparison.OrdinalIgnoreCase))
+        {
+            var backend = target.Host.Replace("cvmanager.", "cvmanager-backend.", StringComparison.OrdinalIgnoreCase);
+            yield return $"{target.Scheme}://{backend}/graphql";
+        }
+    }
+
+    /// <summary>
+    /// Extra HTTP(S) targets for Nuclei/Ferox/FFUF — discovered API/GraphQL backends, same-site safe only.
+    /// </summary>
+    private static List<string> BuildSecondaryScanTargets(HttpClientHandler handler, string targetUrl)
+    {
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var primary))
+            return [];
+
+        var candidates = new List<string>();
+        candidates.AddRange(DiscoverAuthenticatedApiBases(handler, targetUrl));
+        candidates.AddRange(DiscoverHeuristicApiBases(targetUrl));
+
+        var results = new List<string>();
+        foreach (var raw in candidates)
+        {
+            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+                continue;
+            if (string.Equals(uri.Host, primary.Host, StringComparison.OrdinalIgnoreCase))
+                continue;
+            try
+            {
+                ScanHostSafety.EnsureSafeHttpTarget(uri.ToString());
+            }
+            catch
+            {
+                continue;
+            }
+
+            // Prefer full GraphQL/API URL for Nuclei; directory discovery will normalize to origin.
+            var normalized = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+            if (results.Any(r => string.Equals(r, normalized, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            results.Add(normalized);
+            if (results.Count >= 3)
+                break;
+        }
+
+        return results;
+    }
+
+    private static string ToOriginUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return url.TrimEnd('/') + "/";
+        return $"{uri.Scheme}://{uri.Authority}/";
+    }
+
+    private static NucleiToolOptions CloneNucleiOptions(NucleiToolOptions source, int maxDurationSeconds)
+    {
+        var clone = new NucleiToolOptions
+        {
+            Profile = source.Profile,
+            Severity = source.Severity,
+            Tags = source.Tags,
+            ExposureTags = source.ExposureTags,
+            Concurrency = source.Concurrency,
+            RateLimit = source.RateLimit,
+            TimeoutSeconds = source.TimeoutSeconds,
+            Retries = source.Retries,
+            MaxDurationSeconds = maxDurationSeconds,
+        };
+        clone.Normalize();
+        // Preserve caller duration after Normalize (deep profile may bump 240→300).
+        clone.MaxDurationSeconds = Math.Clamp(maxDurationSeconds, 30, 900);
+        return clone;
     }
 
     private async Task<IReadOnlyList<ScanFindingDto>> DiffAuthzPathsAsync(
@@ -1560,121 +1641,212 @@ public sealed class WebsiteScanProcessor(
             }
         }
 
-        if (open.Count > 0)
+        open = open.Distinct().OrderBy(p => p).ToList();
+        var banners = new Dictionary<int, string?>();
+        foreach (var port in open.Take(24))
         {
-            var risky = open.Where(p => p is 21 or 23 or 445 or 3306 or 3389 or 5432 or 6379).ToList();
-            return
-            [
-                Finding(check, tools, "Medium", "port.open", P(
-                    ("host", host), ("port", open[0].ToString()), ("observed", $"TCP connections succeeded to {host} on {string.Join(", ", open)} (tool={toolUsed})."),
-                    ("impact", risky.Count > 0 ? $"Sensitive management or database ports are exposed: {string.Join(", ", risky)}." : "Open ports increase the attack surface.")),
-                    $"host={host}; open={string.Join(',', open)}; tool={toolUsed}; ports_tested={ports.Length}")
-            ];
+            cancellationToken.ThrowIfCancellationRequested();
+            banners[port] = await ProbePortBannerAsync(host, port, cancellationToken);
         }
 
+        var assessment = PortScanAssessor.Assess(host, open, ports, toolUsed, banners);
         return
         [
-            Finding(check, tools, "Info", "port.none", P(("host", host)), $"host={host}; tool={toolUsed}; ports_tested={ports.Length}")
+            Finding(check, tools, assessment.Severity, assessment.Code, P(
+                    ("host", host),
+                    ("port", open.Count > 0 ? open[0].ToString() : ""),
+                    ("observed", assessment.Observed),
+                    ("impact", assessment.Impact)),
+                assessment.Evidence)
         ];
     }
 
-    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDirectoryDiscoveryAsync(
-        HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, ScanToolOptions toolOpts, CancellationToken cancellationToken)
+    private static async Task<string?> ProbePortBannerAsync(string host, int port, CancellationToken cancellationToken)
     {
-        // Prefer external discovery tools when selected and present on PATH.
-        if (tools.Contains("feroxbuster", StringComparer.OrdinalIgnoreCase))
+        try
         {
-            var ferox = await ExternalToolRunner.TryFeroxAsync(targetUrl, cancellationToken, toolOpts.Feroxbuster);
-            if (ferox is { Ran: true })
-            {
-                var hits = ExternalToolRunner.ParseFeroxHits(ferox.StdOut);
-                if (hits.Count > 0)
-                {
-                    var sample = hits[0];
-                    return
-                    [
-                        Finding(check, tools, "Medium", "directory.found", P(
-                            ("url", sample.Url), ("status", sample.Status.ToString()),
-                            ("observed", $"Feroxbuster found {hits.Count} path(s). Sample: {string.Join(", ", hits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
-                            ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
-                            $"tool=feroxbuster; {string.Join("; ", hits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
-                    ];
-                }
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromMilliseconds(900));
+            using var client = new System.Net.Sockets.TcpClient();
+            await client.ConnectAsync(host, port, cts.Token);
+            await using var stream = client.GetStream();
+            stream.ReadTimeout = 700;
+            stream.WriteTimeout = 700;
 
-                return
-                [
-                    Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)),
-                        $"tool=feroxbuster; exit={ferox.ExitCode}")
-                ];
+            // Nudge common cleartext services; TLS ports usually won't return a clear banner.
+            if (port is 80 or 8080)
+            {
+                var probe = Encoding.ASCII.GetBytes($"HEAD / HTTP/1.0\r\nHost: {host}\r\n\r\n");
+                await stream.WriteAsync(probe, cts.Token);
             }
+            else if (port is 21 or 22 or 25 or 110 or 143 or 3306 or 5432 or 6379)
+            {
+                // Many of these send an unsolicited banner.
+            }
+
+            var buffer = new byte[256];
+            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cts.Token);
+            if (read <= 0) return null;
+            var text = Encoding.UTF8.GetString(buffer, 0, read);
+            text = Regex.Replace(text, @"[^\x20-\x7E]+", " ").Trim();
+            if (text.Length < 3) return null;
+            return text.Length > 80 ? text[..80] : text;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDirectoryDiscoveryAsync(
+        HttpClient client,
+        ScanCheckDefinition check,
+        IReadOnlyList<string> tools,
+        string targetUrl,
+        IReadOnlyList<string> secondaryTargets,
+        ScanToolOptions toolOpts,
+        CancellationToken cancellationToken)
+    {
+        var origins = new List<string> { ToOriginUrl(targetUrl) };
+        foreach (var secondary in secondaryTargets)
+        {
+            var origin = ToOriginUrl(secondary);
+            if (!origins.Any(o => string.Equals(o, origin, StringComparison.OrdinalIgnoreCase)))
+                origins.Add(origin);
         }
 
-        if (tools.Contains("ffuf", StringComparer.OrdinalIgnoreCase))
-        {
-            var ffuf = await ExternalToolRunner.TryFfufAsync(targetUrl, cancellationToken, toolOpts.Ffuf);
-            if (ffuf is { Ran: true })
-            {
-                var hits = ExternalToolRunner.ParseFfufHits(ffuf.StdOut);
-                if (hits.Count > 0)
-                {
-                    var sample = hits[0];
-                    return
-                    [
-                        Finding(check, tools, "Medium", "directory.found", P(
-                            ("url", sample.Url), ("status", sample.Status.ToString()),
-                            ("observed", $"FFUF found {hits.Count} path(s). Sample: {string.Join(", ", hits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
-                            ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
-                            $"tool=ffuf; {string.Join("; ", hits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
-                    ];
-                }
+        var allHits = new List<ExternalToolRunner.DiscoveryHit>();
+        string? toolName = null;
+        var toolNotes = new List<string>();
 
-                return
-                [
-                    Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)),
-                        $"tool=ffuf; exit={ffuf.ExitCode}")
-                ];
-            }
-        }
-
-        var baseUri = new Uri(targetUrl.TrimEnd('/') + "/");
-        var paths = new[]
-        {
-            "admin", "login", "dashboard", "api", "swagger", "graphql",
-            "backup", "uploads", "static", "assets", "wp-admin", "robots.txt", "sitemap.xml"
-        };
-
-        var baseline = await ProbeUrlAsync(
-            client,
-            new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__/").ToString(),
-            cancellationToken);
-
-        var found = new List<(string Path, int Code, string Url, string Note)>();
-
-        foreach (var path in paths)
+        foreach (var (origin, index) in origins.Select((o, i) => (o, i)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            try
+            var feroxOpts = toolOpts.Feroxbuster;
+            var ffufOpts = toolOpts.Ffuf;
+            if (index > 0)
             {
-                var url = new Uri(baseUri, path).ToString();
-                var probe = await ProbeUrlAsync(client, url, cancellationToken);
-                if (probe is null) continue;
-
-                var code = probe.StatusCode;
-                if (code is 401 or 403)
+                feroxOpts = new FeroxToolOptions
                 {
-                    found.Add((path, code, url, "auth/forbidden"));
+                    Depth = Math.Min(feroxOpts.Depth, 1),
+                    Threads = Math.Min(feroxOpts.Threads, 20),
+                    TimeoutSeconds = Math.Min(feroxOpts.TimeoutSeconds, 5),
+                    MaxDurationSeconds = Math.Clamp(feroxOpts.MaxDurationSeconds / 2, 30, 60),
+                };
+                feroxOpts.Normalize();
+                ffufOpts = new FfufToolOptions
+                {
+                    Threads = Math.Min(ffufOpts.Threads, 20),
+                    TimeoutSeconds = Math.Min(ffufOpts.TimeoutSeconds, 5),
+                    MaxDurationSeconds = Math.Clamp(ffufOpts.MaxDurationSeconds / 2, 30, 60),
+                    MatchCodes = ffufOpts.MatchCodes,
+                };
+                ffufOpts.Normalize();
+            }
+
+            if (tools.Contains("feroxbuster", StringComparer.OrdinalIgnoreCase))
+            {
+                var ferox = await ExternalToolRunner.TryFeroxAsync(origin, cancellationToken, feroxOpts);
+                if (ferox is { Ran: true })
+                {
+                    toolName ??= "feroxbuster";
+                    var hits = ExternalToolRunner.ParseFeroxHits(ferox.StdOut);
+                    allHits.AddRange(hits);
+                    toolNotes.Add($"{origin} ferox exit={ferox.ExitCode} hits={hits.Count}");
+                    if (hits.Count > 0) continue;
+                    if (ferox.ExitCode is not (0 or 1) && index == 0)
+                        toolNotes.Add($"ferox_warn_exit={ferox.ExitCode}");
                     continue;
                 }
-
-                if (code is < 200 or >= 400) continue;
-                if (IsSoft404OrSpaFallback(probe, baseline, path, allowHtml: true)) continue;
-
-                // Directory/path hits: accept distinct content from baseline (HTML login/admin hợp lệ)
-                found.Add((path, code, url, probe.ContentType ?? "unknown"));
             }
-            catch
+
+            if (tools.Contains("ffuf", StringComparer.OrdinalIgnoreCase))
             {
-                // ignore
+                var ffuf = await ExternalToolRunner.TryFfufAsync(origin, cancellationToken, ffufOpts);
+                if (ffuf is { Ran: true })
+                {
+                    toolName ??= "ffuf";
+                    var hits = ExternalToolRunner.ParseFfufHits(ffuf.StdOut);
+                    allHits.AddRange(hits);
+                    toolNotes.Add($"{origin} ffuf exit={ffuf.ExitCode} hits={hits.Count}");
+                }
+            }
+        }
+
+        allHits = allHits
+            .GroupBy(h => h.Url, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .Take(80)
+            .ToList();
+
+        if (allHits.Count > 0)
+        {
+            var sample = allHits[0];
+            return
+            [
+                Finding(check, tools, "Medium", "directory.found", P(
+                        ("url", sample.Url), ("status", sample.Status.ToString()),
+                        ("observed", $"{toolName ?? "discovery"} found {allHits.Count} path(s) across {origins.Count} origin(s). Sample: {string.Join(", ", allHits.Take(12).Select(h => $"{h.Url}({h.Status})"))}."),
+                        ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
+                    $"tool={toolName}; targets={origins.Count}; {string.Join("; ", allHits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
+            ];
+        }
+
+        if (toolName is not null)
+        {
+            var warn = toolNotes.Any(n => n.Contains("ferox_warn_exit", StringComparison.Ordinal));
+            return
+            [
+                Finding(check, tools, "Info", warn ? "directory.tool_warn" : "directory.none",
+                    P(("targetUrl", targetUrl),
+                        ("observed", warn
+                            ? $"Directory tool finished without hits (non-zero exit). Notes: {string.Join(" | ", toolNotes.Take(6))}"
+                            : $"No discovery hits across {origins.Count} origin(s).")),
+                    $"tool={toolName}; targets={string.Join(",", origins)}; {string.Join(" | ", toolNotes.Take(8))}")
+            ];
+        }
+
+        // Built-in wordlist on primary (+ secondary origins, capped).
+        var found = new List<(string Path, int Code, string Url, string Note)>();
+        foreach (var origin in origins.Take(2))
+        {
+            var baseUri = new Uri(origin);
+            var paths = new[]
+            {
+                "admin", "login", "dashboard", "api", "swagger", "graphql",
+                "backup", "uploads", "static", "assets", "wp-admin", "robots.txt", "sitemap.xml"
+            };
+
+            var baseline = await ProbeUrlAsync(
+                client,
+                new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__/").ToString(),
+                cancellationToken);
+
+            foreach (var path in paths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var url = new Uri(baseUri, path).ToString();
+                    var probe = await ProbeUrlAsync(client, url, cancellationToken);
+                    if (probe is null) continue;
+
+                    var code = probe.StatusCode;
+                    if (code is 401 or 403)
+                    {
+                        found.Add((path, code, url, "auth/forbidden"));
+                        continue;
+                    }
+
+                    if (code is < 200 or >= 400) continue;
+                    if (IsSoft404OrSpaFallback(probe, baseline, path, allowHtml: true)) continue;
+
+                    found.Add((path, code, url, probe.ContentType ?? "unknown"));
+                }
+                catch
+                {
+                    // ignore
+                }
             }
         }
 
@@ -1684,49 +1856,81 @@ public sealed class WebsiteScanProcessor(
             return
             [
                 Finding(check, tools, "Medium", "directory.found", P(
-                    ("url", sample.Url), ("status", sample.Code.ToString()),
-                    ("observed", $"The built-in wordlist found {found.Count} paths: {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}."),
-                    ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
+                        ("url", sample.Url), ("status", sample.Code.ToString()),
+                        ("observed", $"The built-in wordlist found {found.Count} paths: {string.Join(", ", found.Select(f => $"{f.Path}({f.Code})"))}."),
+                        ("impact", "Exposed administration, backup, or API paths can focus attacker activity.")),
                     string.Join("; ", found.Select(f => $"{f.Url} -> {f.Code} [{f.Note}]")))
             ];
         }
 
         return
         [
-            Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)), null)
+            Finding(check, tools, "Info", "directory.none", P(("targetUrl", targetUrl)),
+                $"targets={string.Join(",", origins)}")
         ];
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateSensitiveFilesAsync(
-        HttpClient client, ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, NucleiToolOptions nucleiOpts, CancellationToken cancellationToken)
+        HttpClient client,
+        ScanCheckDefinition check,
+        IReadOnlyList<string> tools,
+        string targetUrl,
+        IReadOnlyList<string> secondaryTargets,
+        NucleiToolOptions nucleiOpts,
+        CancellationToken cancellationToken)
     {
         var findings = new List<ScanFindingDto>();
+        var nucleiTargets = new List<string> { targetUrl };
+        foreach (var secondary in secondaryTargets.Take(2))
+        {
+            if (!nucleiTargets.Any(t => string.Equals(t, secondary, StringComparison.OrdinalIgnoreCase)))
+                nucleiTargets.Add(secondary);
+        }
 
         if (tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase))
         {
-            var nuclei = await ExternalToolRunner.TryNucleiExposuresAsync(targetUrl, cancellationToken, nucleiOpts);
-            if (nuclei is { Ran: true })
+            var totalHits = 0;
+            var notes = new List<string>();
+            var completed = 0;
+            foreach (var (url, index) in nucleiTargets.Select((u, i) => (u, i)))
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                var opts = index == 0
+                    ? nucleiOpts
+                    : CloneNucleiOptions(nucleiOpts, Math.Clamp(nucleiOpts.MaxDurationSeconds / 3, 45, 75));
+                var nuclei = await ExternalToolRunner.TryNucleiExposuresAsync(url, cancellationToken, opts);
+                if (nuclei is not { Ran: true }) continue;
+                completed++;
                 var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
-                if (count > 0)
-                {
-                    findings.Add(Finding(check, tools, "High", "sensitive.nuclei.hits",
-                        P(("observed", $"Nuclei exposure/config templates reported {count} finding(s). Sample: {Truncate(nuclei.Summary)}"),
-                            ("impact", "Exposed configs, backups, or secrets may be downloadable."),
-                            ("targetUrl", targetUrl)),
-                        $"tool=nuclei; count={count}; exit={nuclei.ExitCode}"));
-                }
-                else
-                {
-                    findings.Add(Finding(check, tools, "Info", "sensitive.nuclei.none",
-                        P(("observed", "Nuclei exposure templates returned no hits."),
-                            ("targetUrl", targetUrl)),
-                        $"tool=nuclei; exit={nuclei.ExitCode}"));
-                }
+                totalHits += count;
+                notes.Add($"{url}: hits={count}; exit={nuclei.ExitCode}");
+            }
+
+            if (totalHits > 0)
+            {
+                findings.Add(Finding(check, tools, "High", "sensitive.nuclei.hits",
+                    P(("observed", $"Nuclei exposure/config templates reported {totalHits} finding(s) across {completed} target(s). {string.Join(" ", notes.Take(4))}"),
+                        ("impact", "Exposed configs, backups, or secrets may be downloadable."),
+                        ("targetUrl", targetUrl)),
+                    $"tool=nuclei; count={totalHits}; targets={completed}; {string.Join(" | ", notes.Take(6))}"));
+            }
+            else if (completed > 0)
+            {
+                findings.Add(Finding(check, tools, "Info", "sensitive.nuclei.none",
+                    P(("observed", $"Nuclei exposure templates returned no hits on {completed} target(s)."),
+                        ("targetUrl", targetUrl)),
+                    $"tool=nuclei; targets={string.Join(",", nucleiTargets)}; {string.Join(" | ", notes.Take(6))}"));
             }
         }
 
-        var baseUri = new Uri(targetUrl.TrimEnd('/') + "/");
+        var origins = new List<string> { ToOriginUrl(targetUrl) };
+        foreach (var secondary in secondaryTargets.Take(2))
+        {
+            var origin = ToOriginUrl(secondary);
+            if (!origins.Any(o => string.Equals(o, origin, StringComparison.OrdinalIgnoreCase)))
+                origins.Add(origin);
+        }
+
         var paths = new[]
         {
             ".env", ".git/config", ".git/HEAD", "web.config", "appsettings.json",
@@ -1734,34 +1938,40 @@ public sealed class WebsiteScanProcessor(
             "id_rsa", "server-status", "actuator/env", "api/swagger.json"
         };
 
-        var baseline = await ProbeUrlAsync(
-            client,
-            new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__.txt").ToString(),
-            cancellationToken);
-
         var hits = new List<(string Path, int Code, string Url, string EvidenceNote)>();
+        UrlProbe? lastBaseline = null;
 
-        foreach (var path in paths)
+        foreach (var origin in origins)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var url = new Uri(baseUri, path).ToString();
-                var probe = await ProbeUrlAsync(client, url, cancellationToken);
-                if (probe is null) continue;
-                if (probe.StatusCode is < 200 or >= 300) continue;
-                if (IsSoft404OrSpaFallback(probe, baseline, path, allowHtml: false)) continue;
-                if (!LooksLikeSensitiveContent(path, probe)) continue;
+            var baseUri = new Uri(origin);
+            var baseline = await ProbeUrlAsync(
+                client,
+                new Uri(baseUri, $".__sp_missing_{Guid.NewGuid():N}__.txt").ToString(),
+                cancellationToken);
+            lastBaseline = baseline;
 
-                hits.Add((
-                    path,
-                    probe.StatusCode,
-                    url,
-                    $"ctype={probe.ContentType ?? "—"}; bytes={probe.BodyLength}; marker=validated"));
-            }
-            catch
+            foreach (var path in paths)
             {
-                // ignore
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var url = new Uri(baseUri, path).ToString();
+                    var probe = await ProbeUrlAsync(client, url, cancellationToken);
+                    if (probe is null) continue;
+                    if (probe.StatusCode is < 200 or >= 300) continue;
+                    if (IsSoft404OrSpaFallback(probe, baseline, path, allowHtml: false)) continue;
+                    if (!LooksLikeSensitiveContent(path, probe)) continue;
+
+                    hits.Add((
+                        path,
+                        probe.StatusCode,
+                        url,
+                        $"ctype={probe.ContentType ?? "—"}; bytes={probe.BodyLength}; marker=validated"));
+                }
+                catch
+                {
+                    // ignore
+                }
             }
         }
 
@@ -1769,15 +1979,17 @@ public sealed class WebsiteScanProcessor(
         {
             var sample = hits[0];
             findings.Add(Finding(check, tools, "High", "sensitive.found", P(
-                ("url", sample.Url), ("status", sample.Code.ToString()),
-                ("observed", $"Validated sensitive paths returned HTTP 2xx: {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}."),
-                ("impact", "Configuration, backup, or source files may expose secrets and system details.")),
+                    ("url", sample.Url), ("status", sample.Code.ToString()),
+                    ("observed", $"Validated sensitive paths returned HTTP 2xx: {string.Join(", ", hits.Select(h => $"{h.Path}({h.Code})"))}."),
+                    ("impact", "Configuration, backup, or source files may expose secrets and system details.")),
                 string.Join("; ", hits.Select(h => $"{h.Url} -> {h.Code}; {h.EvidenceNote}"))));
         }
         else if (findings.Count == 0)
         {
             findings.Add(Finding(check, tools, "Info", "sensitive.none", P(("targetUrl", targetUrl)),
-                baseline is null ? null : $"baseline_status={baseline.StatusCode}; baseline_ctype={baseline.ContentType ?? "unknown"}"));
+                lastBaseline is null
+                    ? $"targets={origins.Count}"
+                    : $"baseline_status={lastBaseline.StatusCode}; baseline_ctype={lastBaseline.ContentType ?? "unknown"}; targets={origins.Count}"));
         }
 
         return findings;
@@ -1934,57 +2146,118 @@ public sealed class WebsiteScanProcessor(
     }
 
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateVulnerabilityAsync(
-        ScanCheckDefinition check, IReadOnlyList<string> tools, string targetUrl, NucleiToolOptions nucleiOpts, CancellationToken cancellationToken)
+        ScanCheckDefinition check,
+        IReadOnlyList<string> tools,
+        string targetUrl,
+        IReadOnlyList<string> secondaryTargets,
+        NucleiToolOptions nucleiOpts,
+        CancellationToken cancellationToken)
     {
-        if (tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase))
+        if (!tools.Contains("nuclei", StringComparer.OrdinalIgnoreCase)
+            || !ExternalToolRunner.IsAvailable("nuclei"))
         {
-            var nuclei = await ExternalToolRunner.TryNucleiAsync(targetUrl, cancellationToken, options: nucleiOpts);
-            if (nuclei is { Ran: true })
-            {
-                var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
-                var partial = nuclei.Summary.Contains("partial", StringComparison.OrdinalIgnoreCase)
-                              || nuclei.ExitCode == -1;
-                if (count > 0)
-                {
-                    return
-                    [
-                        Finding(check, tools, "High", "vuln.nuclei.hits",
-                            P(("observed", $"Nuclei ({nucleiOpts.Profile}) reported {count} finding(s){(partial ? " (partial run)" : "")}. Sample: {Truncate(nuclei.Summary)}"),
-                                ("impact", "Template-based scanner detected exposures or CVEs."),
-                                ("targetUrl", targetUrl)),
-                            $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; count={count}; exit={nuclei.ExitCode}; partial={partial}")
-                    ];
-                }
+            return
+            [
+                Finding(check, tools, "Info", "vuln.placeholder",
+                    P(("observed", "Nuclei binary not available on scanner host; vulnerability templates were skipped."),
+                        ("impact", "Install Nuclei on the API/worker image or keep sensitive-file-scan enabled."),
+                        ("targetUrl", targetUrl)),
+                    $"target={targetUrl}; tool=nuclei; available=false")
+            ];
+        }
 
-                return
-                [
-                    Finding(check, tools, "Info", "vuln.nuclei.none",
-                        P(("observed", $"Nuclei ({nucleiOpts.Profile}) completed with no hits for severity={nucleiOpts.Severity}{(partial ? " (partial/timed out with empty stdout)" : "")}."),
-                            ("targetUrl", targetUrl)),
-                        $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; exit={nuclei.ExitCode}; partial={partial}")
-                ];
+        var targets = new List<string> { targetUrl };
+        foreach (var secondary in secondaryTargets.Take(2))
+        {
+            if (!targets.Any(t => string.Equals(t, secondary, StringComparison.OrdinalIgnoreCase)))
+                targets.Add(secondary);
+        }
+
+        var totalHits = 0;
+        var notes = new List<string>();
+        var anyPartial = false;
+        var anyCompleteSuccess = false;
+        var anyHardFailure = false;
+        string? lastSummary = null;
+
+        foreach (var (url, index) in targets.Select((u, i) => (u, i)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Secondary backends get a shorter budget so Deep max-detection still finishes.
+            var opts = index == 0
+                ? nucleiOpts
+                : CloneNucleiOptions(nucleiOpts, Math.Clamp(nucleiOpts.MaxDurationSeconds / 2, 60, 120));
+
+            var nuclei = await ExternalToolRunner.TryNucleiAsync(url, cancellationToken, options: opts);
+            if (nuclei is null)
+            {
+                anyHardFailure = true;
+                notes.Add($"{url}: unavailable");
+                continue;
             }
 
-            if (nuclei is { Ran: false })
+            lastSummary = nuclei.Summary;
+            var count = ExternalToolRunner.CountNucleiFindings(nuclei.StdOut);
+            var partial = nuclei.Summary.Contains("partial", StringComparison.OrdinalIgnoreCase)
+                          || nuclei.ExitCode == -1;
+            if (partial) anyPartial = true;
+
+            if (nuclei.Ran)
             {
-                return
-                [
-                    Finding(check, tools, "Info", "vuln.nuclei.error",
-                        P(("observed", $"Nuclei was present but did not complete: {Truncate(nuclei.Summary)}"),
-                            ("impact", "Vulnerability coverage may be incomplete until Nuclei runs successfully."),
-                            ("targetUrl", targetUrl)),
-                        $"tool=nuclei; ran=false; exit={nuclei.ExitCode}; err={Truncate(nuclei.StdErr)}")
-                ];
+                if (!partial || count > 0)
+                    anyCompleteSuccess = true;
+                totalHits += count;
+                notes.Add($"{url}: hits={count}; exit={nuclei.ExitCode}; partial={partial}");
             }
+            else
+            {
+                anyHardFailure = true;
+                notes.Add($"{url}: error={Truncate(nuclei.Summary)}");
+            }
+        }
+
+        if (totalHits > 0)
+        {
+            return
+            [
+                Finding(check, tools, "High", "vuln.nuclei.hits",
+                    P(("observed", $"Nuclei ({nucleiOpts.Profile}) reported {totalHits} finding(s) across {targets.Count} target(s){(anyPartial ? " (includes partial run)" : "")}. {string.Join(" ", notes.Take(4))}"),
+                        ("impact", "Template-based scanner detected exposures or CVEs."),
+                        ("targetUrl", targetUrl)),
+                    $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; count={totalHits}; targets={targets.Count}; partial={anyPartial}; {string.Join(" | ", notes.Take(6))}")
+            ];
+        }
+
+        if (anyCompleteSuccess && !anyHardFailure)
+        {
+            return
+            [
+                Finding(check, tools, "Info", "vuln.nuclei.none",
+                    P(("observed", $"Nuclei ({nucleiOpts.Profile}) completed with no hits for severity={nucleiOpts.Severity} on {targets.Count} target(s){(anyPartial ? " (partial on some)" : "")}."),
+                        ("targetUrl", targetUrl)),
+                    $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; targets={string.Join(",", targets)}; partial={anyPartial}; {string.Join(" | ", notes.Take(6))}")
+            ];
+        }
+
+        if (anyCompleteSuccess)
+        {
+            // Primary or a secondary finished clean; mention incomplete siblings without failing the check.
+            return
+            [
+                Finding(check, tools, "Info", "vuln.nuclei.none",
+                    P(("observed", $"Nuclei ({nucleiOpts.Profile}) found no hits; some targets incomplete. {string.Join(" ", notes.Take(4))}"),
+                        ("targetUrl", targetUrl)),
+                    $"tool=nuclei; profile={nucleiOpts.Profile}; severity={nucleiOpts.Severity}; partial={anyPartial}; {string.Join(" | ", notes.Take(6))}")
+            ];
         }
 
         return
         [
-            Finding(check, tools, "Info", "vuln.placeholder",
-                P(("observed", "Nuclei binary not available on scanner host; vulnerability templates were skipped."),
-                    ("impact", "Install Nuclei on the API/worker image or keep sensitive-file-scan enabled."),
+            Finding(check, tools, "Info", "vuln.nuclei.error",
+                P(("observed", $"Nuclei was present but did not complete on scanned targets: {Truncate(lastSummary ?? string.Join("; ", notes))}"),
+                    ("impact", "Vulnerability coverage may be incomplete until Nuclei runs successfully."),
                     ("targetUrl", targetUrl)),
-                $"target={targetUrl}; tool=nuclei; available=false")
+                $"tool=nuclei; ran=false; targets={targets.Count}; {string.Join(" | ", notes.Take(6))}")
         ];
     }
 
