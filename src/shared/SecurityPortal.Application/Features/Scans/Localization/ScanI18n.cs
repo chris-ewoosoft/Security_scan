@@ -92,8 +92,10 @@ public static class ScanI18n
             "source.inventory.error" => ("Source inventory error", "Observed: {observed}\nImpact: {impact}\nRepository: {repository}", "Retry with a reachable repository and valid credentials.", null),
             "source.route.exposed" => ("Source route anonymously reachable", "Observed: {observed}\nImpact: {impact}", "Confirm each anonymous 2xx route is intentionally public; add authz where needed.", ["curl -sI \"{targetUrl}\"", "Compare with source inventory routes"]),
             "source.route.sensitive_exposed" => ("Sensitive source route anonymously reachable", "Observed: {observed}\nImpact: {impact}", "Lock down auth/admin API routes; require authentication and authorize every action.", ["curl -sI the listed URLs without credentials", "Expect 401/403 for non-public APIs"]),
+            "source.route.public_ok" => ("AllowAnonymous routes reachable as designed", "Observed: {observed}\nImpact: {impact}", "Keep the public allowlist reviewed; do not treat these as missing authz.", null),
             "source.route.auth_required" => ("Source routes require authentication", "Observed: {observed}\nImpact: {impact}", "Continue with authenticated scan coverage for these endpoints.", null),
             "source.route.probe_none" => ("Source route probes inconclusive", "Observed: {observed}", "Verify base URL/path prefix matches the deployed API.", null),
+            "source.authz.owner_token" => ("Object route uses owner/scan-token guard", "Observed: {observed}\nImpact: {impact}\nFile: {file}:{line}\nPath: {path}", "Confirm token binding cannot be bypassed across owners.", ["Review {file}:{line}", "Call with another owner's object id + token"]),
             _ => (code, "{observed}", "", null)
         };
         var (title, detail, recommendation, steps) = template;
@@ -213,8 +215,10 @@ public static class ScanI18n
             "source.inventory.error" => ("Lỗi inventory source", "Quan sát: {observed}\nTác động: {impact}\nRepo: {repository}", "Thử lại với repo truy cập được và credential hợp lệ.", null),
             "source.route.exposed" => ("Route từ source truy cập được ẩn danh", "Quan sát: {observed}\nTác động: {impact}", "Xác nhận từng route 2xx ẩn danh là cố ý public; bổ sung authz nếu cần.", ["curl -sI \"{targetUrl}\"", "Đối chiếu với inventory route từ source"]),
             "source.route.sensitive_exposed" => ("Route nhạy cảm từ source truy cập được ẩn danh", "Quan sát: {observed}\nTác động: {impact}", "Khóa API auth/admin; bắt buộc authentication và authorize mọi action.", ["curl -sI các URL đã liệt kê không kèm credential", "Kỳ vọng 401/403 với API không public"]),
+            "source.route.public_ok" => ("Route AllowAnonymous truy cập đúng thiết kế", "Quan sát: {observed}\nTác động: {impact}", "Giữ allowlist public được rà soát; không coi đây là thiếu authz.", null),
             "source.route.auth_required" => ("Route từ source yêu cầu xác thực", "Quan sát: {observed}\nTác động: {impact}", "Tiếp tục phủ bằng authenticated scan cho các endpoint này.", null),
             "source.route.probe_none" => ("Probe route từ source chưa có tín hiệu rõ", "Quan sát: {observed}", "Kiểm tra base URL/path prefix khớp API đang deploy.", null),
+            "source.authz.owner_token" => ("Route object dùng guard owner/scan-token", "Quan sát: {observed}\nTác động: {impact}\nFile: {file}:{line}\nPath: {path}", "Xác nhận token binding không bypass được giữa các owner.", ["Xem {file}:{line}", "Gọi với object id + token của owner khác"]),
             _ => (title, detail, recommendation, steps)
         };
 

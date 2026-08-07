@@ -470,28 +470,70 @@ public static class ExternalToolRunner
     }
 
     public static async Task<ToolRunResult?> TryFeroxAsync(
-        string targetUrl, CancellationToken ct, FeroxToolOptions? options = null)
+        string targetUrl,
+        CancellationToken ct,
+        FeroxToolOptions? options = null,
+        string? wordlistPath = null)
     {
         if (!IsAvailable("feroxbuster")) return null;
         options ??= FeroxToolOptions.CreateDefault();
         options.Normalize();
-        var wordlist = FindWordlist();
+        var wordlist = !string.IsNullOrWhiteSpace(wordlistPath) && File.Exists(wordlistPath)
+            ? wordlistPath
+            : FindWordlist();
         var wl = wordlist is null ? "" : $" -w {Quote(wordlist)}";
         var args = $"-u {Quote(targetUrl)} -q -t {options.Threads} -d {options.Depth} --timeout {options.TimeoutSeconds} -n --json{wl}";
         return await RunAsync("feroxbuster", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
     }
 
     public static async Task<ToolRunResult?> TryFfufAsync(
-        string targetUrl, CancellationToken ct, FfufToolOptions? options = null)
+        string targetUrl,
+        CancellationToken ct,
+        FfufToolOptions? options = null,
+        string? wordlistPath = null)
     {
         if (!IsAvailable("ffuf")) return null;
         options ??= FfufToolOptions.CreateDefault();
         options.Normalize();
-        var wordlist = FindWordlist();
+        var wordlist = !string.IsNullOrWhiteSpace(wordlistPath) && File.Exists(wordlistPath)
+            ? wordlistPath
+            : FindWordlist();
         if (wordlist is null) return null;
         var baseUrl = targetUrl.TrimEnd('/') + "/FUZZ";
         var args = $"-u {Quote(baseUrl)} -w {Quote(wordlist)} -mc {options.MatchCodes} -t {options.Threads} -timeout {options.TimeoutSeconds} -s";
         return await RunAsync("ffuf", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
+    }
+
+    /// <summary>Write a temporary wordlist merging built-in common paths with source-derived paths.</summary>
+    public static string? WriteMergedWordlist(IEnumerable<string> extraPaths)
+    {
+        try
+        {
+            var extras = extraPaths
+                .Select(p => p.Trim().TrimStart('/'))
+                .Where(p => p.Length > 0 && p.Length < 200 && !p.Contains(' ', StringComparison.Ordinal))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(200)
+                .ToList();
+            if (extras.Count == 0) return null;
+
+            var lines = new List<string>();
+            var builtin = FindWordlist();
+            if (builtin is not null)
+            {
+                try { lines.AddRange(File.ReadAllLines(builtin)); }
+                catch { /* ignore */ }
+            }
+
+            lines.AddRange(extras);
+            var path = Path.Combine(Path.GetTempPath(), $"sp-wl-{Guid.NewGuid():N}.txt");
+            File.WriteAllLines(path, lines.Distinct(StringComparer.OrdinalIgnoreCase));
+            return path;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static IReadOnlyList<string> ParseNaabuOpenPorts(string stdout)

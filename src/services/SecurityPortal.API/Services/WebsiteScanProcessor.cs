@@ -175,6 +175,7 @@ public sealed class WebsiteScanProcessor(
         var authFindings = new List<ScanFindingDto>();
         var sourceFindings = new List<ScanFindingDto>();
         var sourceProbePaths = new List<string>();
+        var sourceProbeRoutes = new List<SourceRouteInventoryAnalyzer.ProbeRoute>();
         var authenticated = false;
         string? authNote = null;
 
@@ -193,14 +194,15 @@ public sealed class WebsiteScanProcessor(
                 scanId, config.Source, secretProtector, fileStorage, logger, cancellationToken);
             sourceFindings.AddRange(inventory.Findings);
             sourceProbePaths.AddRange(inventory.ProbePaths);
+            sourceProbeRoutes.AddRange(inventory.ProbeRoutes);
         }
 
         // Anonymous runtime probes against source-discovered API paths (does not require login).
-        if (sourceProbePaths.Count > 0)
+        if (sourceProbeRoutes.Count > 0 || sourceProbePaths.Count > 0)
         {
             await EnsureNotCancelledAsync(scanId, cancellationToken);
             sourceFindings.AddRange(await EvaluateSourceRouteProbesAsync(
-                client, targetUrl, sourceProbePaths, cancellationToken));
+                client, targetUrl, sourceProbeRoutes, sourceProbePaths, cancellationToken));
         }
 
         if (config.Auth?.IsEnabled == true)
@@ -1741,26 +1743,65 @@ public sealed class WebsiteScanProcessor(
         return results;
     }
 
+    private static HttpMethod ResolveHttpMethod(string method) =>
+        method.ToUpperInvariant() switch
+        {
+            "POST" => HttpMethod.Post,
+            "PUT" => HttpMethod.Put,
+            "DELETE" => HttpMethod.Delete,
+            "PATCH" => HttpMethod.Patch,
+            "HEAD" => HttpMethod.Head,
+            _ => HttpMethod.Get,
+        };
+
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateSourceRouteProbesAsync(
         HttpClient client,
         string targetUrl,
+        IReadOnlyList<SourceRouteInventoryAnalyzer.ProbeRoute> sourceProbeRoutes,
         IReadOnlyList<string> sourceProbePaths,
         CancellationToken cancellationToken)
     {
-        var urls = BuildSourceAbsoluteUrls(targetUrl, sourceProbePaths).Take(40).ToList();
-        if (urls.Count == 0)
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var baseUri))
             return [];
 
-        var exposed = new List<(string Url, int Status, string Note)>();
-        var authRequired = new List<(string Url, int Status)>();
-        var other = new List<(string Url, int Status)>();
+        var routes = sourceProbeRoutes.Count > 0
+            ? sourceProbeRoutes.Take(40).ToList()
+            : sourceProbePaths.Take(40)
+                .Select(p => new SourceRouteInventoryAnalyzer.ProbeRoute("GET", p, false, false))
+                .ToList();
+        if (routes.Count == 0)
+            return [];
 
-        foreach (var url in urls)
+        var intentionalPublic = new List<(string Method, string Url, int Status)>();
+        var unexpectedExposed = new List<(string Method, string Url, int Status, string Note)>();
+        var authRequired = new List<(string Method, string Url, int Status)>();
+        var other = new List<(string Method, string Url, int Status)>();
+        var probed = 0;
+
+        foreach (var route in routes)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            string url;
             try
             {
-                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                url = new Uri(baseUri, route.Path.TrimStart('/')).ToString();
+                ScanHostSafety.EnsureSafeHttpTarget(url);
+            }
+            catch
+            {
+                continue;
+            }
+
+            probed++;
+            try
+            {
+                var httpMethod = ResolveHttpMethod(route.Method);
+                using var req = new HttpRequestMessage(httpMethod, url);
+                if (httpMethod == HttpMethod.Post || httpMethod == HttpMethod.Put || httpMethod == HttpMethod.Patch)
+                {
+                    req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+                }
+
                 using var resp = await SendWithSafeRedirectsAsync(
                     client, req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 var status = (int)resp.StatusCode;
@@ -1768,24 +1809,39 @@ public sealed class WebsiteScanProcessor(
 
                 if (status is 401 or 403)
                 {
-                    authRequired.Add((url, status));
+                    authRequired.Add((route.Method, url, status));
+                    continue;
+                }
+
+                // Wrong method → endpoint exists but this is not anonymous data exposure.
+                if (status == 405)
+                {
+                    other.Add((route.Method, url, status));
                     continue;
                 }
 
                 if (status is >= 200 and < 300)
                 {
-                    // Anonymous 2xx on API-like path from source is a trustworthy exposure signal.
-                    var sensitive = path.Contains("/auth", StringComparison.OrdinalIgnoreCase)
-                                    || path.Contains("password", StringComparison.OrdinalIgnoreCase)
-                                    || path.Contains("admin", StringComparison.OrdinalIgnoreCase)
-                                    || path.Contains("token", StringComparison.OrdinalIgnoreCase)
-                                    || path.Contains("secret", StringComparison.OrdinalIgnoreCase);
-                    exposed.Add((url, status, sensitive ? "sensitive-api" : "api"));
+                    if (route.AllowAnonymous)
+                    {
+                        intentionalPublic.Add((route.Method, url, status));
+                        continue;
+                    }
+
+                    var sensitive = !path.Contains("/auth/login", StringComparison.OrdinalIgnoreCase)
+                                    && !path.Contains("/auth/register", StringComparison.OrdinalIgnoreCase)
+                                    && !path.Contains("/auth/refresh", StringComparison.OrdinalIgnoreCase)
+                                    && (path.Contains("password", StringComparison.OrdinalIgnoreCase)
+                                        || path.Contains("/admin", StringComparison.OrdinalIgnoreCase)
+                                        || path.Contains("secret", StringComparison.OrdinalIgnoreCase)
+                                        || (path.Contains("/auth/", StringComparison.OrdinalIgnoreCase)
+                                            && (httpMethod == HttpMethod.Get)));
+                    unexpectedExposed.Add((route.Method, url, status, sensitive ? "sensitive-api" : "unexpected-anon"));
                     continue;
                 }
 
-                if (status is not (404 or 405))
-                    other.Add((url, status));
+                if (status is not 404)
+                    other.Add((route.Method, url, status));
             }
             catch
             {
@@ -1803,40 +1859,49 @@ public sealed class WebsiteScanProcessor(
             "recon",
             5);
 
-        if (exposed.Count > 0)
+        if (unexpectedExposed.Count > 0)
         {
-            var high = exposed.Where(e => e.Note == "sensitive-api").ToList();
-            var sample = (high.Count > 0 ? high : exposed).Take(12)
-                .Select(e => $"{e.Url}({e.Status})");
+            var high = unexpectedExposed.Where(e => e.Note == "sensitive-api").ToList();
+            var sample = (high.Count > 0 ? high : unexpectedExposed).Take(12)
+                .Select(e => $"{e.Method} {e.Url}({e.Status})");
             findings.Add(Finding(check, check.Tools,
                 high.Count > 0 ? "High" : "Medium",
                 high.Count > 0 ? "source.route.sensitive_exposed" : "source.route.exposed",
-                P(("observed", $"Source-derived routes returned anonymous HTTP 2xx ({exposed.Count}/{urls.Count} probed): {string.Join(", ", sample)}"),
+                P(("observed", $"Source routes without [AllowAnonymous] returned anonymous HTTP 2xx ({unexpectedExposed.Count}/{probed}): {string.Join(", ", sample)}"),
                     ("impact", high.Count > 0
-                        ? "Anonymous access to auth/admin-related API routes increases account takeover and data exposure risk."
-                        : "Anonymous API surface discovered from source should be reviewed for missing authorization."),
+                        ? "Anonymous access to sensitive API routes increases account takeover and data exposure risk."
+                        : "Unexpected anonymous API surface — confirm authorization is intentional."),
                     ("targetUrl", targetUrl),
-                    ("probed", urls.Count.ToString())),
-                string.Join("; ", exposed.Take(40).Select(e => $"{e.Url} -> {e.Status} [{e.Note}]"))));
+                    ("probed", probed.ToString())),
+                string.Join("; ", unexpectedExposed.Take(40).Select(e => $"{e.Method} {e.Url} -> {e.Status} [{e.Note}]"))));
+        }
+
+        if (intentionalPublic.Count > 0)
+        {
+            findings.Add(Finding(check, check.Tools, "Info", "source.route.public_ok",
+                P(("observed", $"{intentionalPublic.Count} [AllowAnonymous] route(s) correctly reachable without auth. Sample: {string.Join(", ", intentionalPublic.Take(8).Select(a => $"{a.Method} {a.Url}({a.Status})"))}"),
+                    ("impact", "Intentional public surface — keep reviewed; do not treat as missing authz."),
+                    ("targetUrl", targetUrl)),
+                string.Join("; ", intentionalPublic.Take(30).Select(a => $"{a.Method} {a.Url} -> {a.Status}"))));
         }
 
         if (authRequired.Count > 0)
         {
             findings.Add(Finding(check, check.Tools, "Info", "source.route.auth_required",
-                P(("observed", $"{authRequired.Count} source-derived route(s) require auth (401/403). Sample: {string.Join(", ", authRequired.Take(8).Select(a => $"{a.Url}({a.Status})"))}"),
+                P(("observed", $"{authRequired.Count} source-derived route(s) require auth (401/403). Sample: {string.Join(", ", authRequired.Take(8).Select(a => $"{a.Method} {a.Url}({a.Status})"))}"),
                     ("impact", "These endpoints exist at runtime; follow up with authenticated testing."),
                     ("targetUrl", targetUrl)),
-                string.Join("; ", authRequired.Take(30).Select(a => $"{a.Url} -> {a.Status}"))));
+                string.Join("; ", authRequired.Take(30).Select(a => $"{a.Method} {a.Url} -> {a.Status}"))));
         }
 
-        if (exposed.Count == 0 && authRequired.Count == 0)
+        if (unexpectedExposed.Count == 0 && intentionalPublic.Count == 0 && authRequired.Count == 0)
         {
             findings.Add(Finding(check, check.Tools, "Info", "source.route.probe_none",
-                P(("observed", $"Probed {urls.Count} source-derived path(s) on {targetUrl}; no anonymous 2xx or 401/403 signals."),
+                P(("observed", $"Probed {probed} source-derived route(s) on {targetUrl}; no anonymous 2xx or 401/403 signals."),
                     ("targetUrl", targetUrl)),
                 other.Count == 0
-                    ? $"probed={urls.Count}"
-                    : $"other={string.Join(',', other.Take(12).Select(o => $"{o.Status}"))}"));
+                    ? $"probed={probed}"
+                    : $"other={string.Join(',', other.Take(12).Select(o => $"{o.Method}:{o.Status}"))}"));
         }
 
         return findings;
@@ -1863,7 +1928,9 @@ public sealed class WebsiteScanProcessor(
         var allHits = new List<ExternalToolRunner.DiscoveryHit>();
         string? toolName = null;
         var toolNotes = new List<string>();
-
+        var sourceWordlist = ExternalToolRunner.WriteMergedWordlist(sourceProbePaths);
+        try
+        {
         foreach (var (origin, index) in origins.Select((o, i) => (o, i)))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1891,23 +1958,23 @@ public sealed class WebsiteScanProcessor(
 
             if (tools.Contains("feroxbuster", StringComparer.OrdinalIgnoreCase))
             {
-                var ferox = await ExternalToolRunner.TryFeroxAsync(origin, cancellationToken, feroxOpts);
+                var ferox = await ExternalToolRunner.TryFeroxAsync(origin, cancellationToken, feroxOpts, sourceWordlist);
                 if (ferox is { Ran: true })
                 {
                     toolName ??= "feroxbuster";
                     var hits = ExternalToolRunner.ParseFeroxHits(ferox.StdOut);
                     allHits.AddRange(hits);
-                    toolNotes.Add($"{origin} ferox exit={ferox.ExitCode} hits={hits.Count}");
+                    toolNotes.Add($"{origin} ferox exit={ferox.ExitCode} hits={hits.Count} wl={(sourceWordlist is null ? "default" : "source+default")}");
                     if (hits.Count > 0) continue;
                     if (ferox.ExitCode is not (0 or 1) && index == 0)
                         toolNotes.Add($"ferox_warn_exit={ferox.ExitCode}");
-                    continue;
+                    // Fall through to ffuf / built-in when ferox finds nothing.
                 }
             }
 
             if (tools.Contains("ffuf", StringComparer.OrdinalIgnoreCase))
             {
-                var ffuf = await ExternalToolRunner.TryFfufAsync(origin, cancellationToken, ffufOpts);
+                var ffuf = await ExternalToolRunner.TryFfufAsync(origin, cancellationToken, ffufOpts, sourceWordlist);
                 if (ffuf is { Ran: true })
                 {
                     toolName ??= "ffuf";
@@ -1936,19 +2003,14 @@ public sealed class WebsiteScanProcessor(
                     $"tool={toolName}; targets={origins.Count}; {string.Join("; ", allHits.Take(40).Select(h => $"{h.Url} -> {h.Status}"))}")
             ];
         }
-
-        if (toolName is not null)
+        // Continue to built-in/source HTTP probes even when ferox/ffuf ran with zero hits.
+        }
+        finally
         {
-            var warn = toolNotes.Any(n => n.Contains("ferox_warn_exit", StringComparison.Ordinal));
-            return
-            [
-                Finding(check, tools, "Info", warn ? "directory.tool_warn" : "directory.none",
-                    P(("targetUrl", targetUrl),
-                        ("observed", warn
-                            ? $"Directory tool finished without hits (non-zero exit). Notes: {string.Join(" | ", toolNotes.Take(6))}"
-                            : $"No discovery hits across {origins.Count} origin(s).")),
-                    $"tool={toolName}; targets={string.Join(",", origins)}; {string.Join(" | ", toolNotes.Take(8))}")
-            ];
+            if (sourceWordlist is not null)
+            {
+                try { File.Delete(sourceWordlist); } catch { /* ignore */ }
+            }
         }
 
         // Built-in wordlist + source-derived paths on primary (+ secondary origins, capped).
@@ -2683,22 +2745,67 @@ public sealed class WebsiteScanProcessor(
 
     private static int Score(IReadOnlyList<ScanFindingDto> findings)
     {
-        // Diminishing returns per severity bucket + floor from max severity.
-        var high = findings.Count(f => f.Severity == "High");
-        var medium = findings.Count(f => f.Severity == "Medium");
-        var low = findings.Count(f => f.Severity == "Low");
+        // Category-weighted score: API/auth/source findings outweigh baseline header gaps.
+        static double Weight(ScanFindingDto f)
+        {
+            var code = f.Code ?? "";
+            if (code.StartsWith("header.", StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("cookie.", StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("fingerprint.", StringComparison.OrdinalIgnoreCase)
+                || code.Equals("reachability.4xx", StringComparison.OrdinalIgnoreCase))
+                return 0.4;
+            if (code.StartsWith("source.route.public_ok", StringComparison.OrdinalIgnoreCase)
+                || code.EndsWith(".none", StringComparison.OrdinalIgnoreCase)
+                || code.EndsWith(".ok", StringComparison.OrdinalIgnoreCase)
+                || code.EndsWith(".placeholder", StringComparison.OrdinalIgnoreCase))
+                return 0;
+            if (code.StartsWith("source.", StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("auth.surface.", StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("vuln.", StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("sensitive.", StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("port.sensitive", StringComparison.OrdinalIgnoreCase))
+                return 1.15;
+            return 1.0;
+        }
 
         double score = 0;
-        for (var i = 0; i < high; i++)
-            score += 25 * Math.Pow(0.85, i);
-        for (var i = 0; i < medium; i++)
-            score += 12 * Math.Pow(0.8, i);
-        for (var i = 0; i < low; i++)
-            score += 5 * Math.Pow(0.75, i);
+        var highIdx = 0;
+        var mediumIdx = 0;
+        var lowIdx = 0;
+        var actionableHigh = 0;
+        var actionableMedium = 0;
+
+        foreach (var f in findings.OrderByDescending(f => f.Severity switch
+                 {
+                     "High" or "Critical" => 3,
+                     "Medium" => 2,
+                     "Low" => 1,
+                     _ => 0
+                 }))
+        {
+            var w = Weight(f);
+            if (w <= 0) continue;
+            switch (f.Severity)
+            {
+                case "High" or "Critical":
+                    score += 25 * Math.Pow(0.85, highIdx++) * w;
+                    if (w >= 1) actionableHigh++;
+                    break;
+                case "Medium":
+                    score += 12 * Math.Pow(0.8, mediumIdx++) * w;
+                    if (w >= 1) actionableMedium++;
+                    break;
+                case "Low":
+                    score += 5 * Math.Pow(0.75, lowIdx++) * w;
+                    break;
+            }
+        }
 
         var rounded = (int)Math.Round(score);
-        if (high > 0) rounded = Math.Max(rounded, 55);      // at least Medium level
-        else if (medium > 0) rounded = Math.Max(rounded, 25);
+        // Floors use weighted/actionable severities so header-only Highs do not force 55+.
+        if (actionableHigh > 0) rounded = Math.Max(rounded, 55);
+        else if (actionableMedium > 0) rounded = Math.Max(rounded, 25);
+        else if (highIdx > 0) rounded = Math.Max(rounded, 35); // baseline-only Highs
 
         return Math.Clamp(rounded, 0, 100);
     }

@@ -42,10 +42,18 @@ public static partial class SourceRouteInventoryAnalyzer
         ".cs", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml", ".graphql", ".gql"
     ];
 
+    /// <summary>Structured probe target retained from source (method + auth hints).</summary>
+    public sealed record ProbeRoute(
+        string Method,
+        string Path,
+        bool AllowAnonymous,
+        bool OwnerTokenGuarded);
+
     public sealed record InventoryResult(
         IReadOnlyList<ScanFindingDto> Findings,
         IReadOnlyList<string> ProbePaths,
-        string? ArtifactJson);
+        string? ArtifactJson,
+        IReadOnlyList<ProbeRoute> ProbeRoutes);
 
     public static async Task<InventoryResult> AnalyzeAsync(
         Guid scanId,
@@ -92,7 +100,7 @@ public static partial class SourceRouteInventoryAnalyzer
                             ("impact", "Source-assisted route inventory and authz hints were skipped."),
                             ("repository", MaskRepo(source.RepositoryUrl))),
                         clone.Message)
-                ], [], null);
+                ], [], null, []);
             }
 
             var size = DirSize(cloneDir, excludeSkipDirs: true);
@@ -105,15 +113,25 @@ public static partial class SourceRouteInventoryAnalyzer
                             ("impact", "Inventory skipped to protect scanner resources."),
                             ("repository", MaskRepo(source.RepositoryUrl))),
                         $"bytes={size}")
-                ], [], null);
+                ], [], null, []);
             }
 
             var inventory = ExtractRoutes(cloneDir, cancellationToken);
-            var probePaths = inventory.Routes
-                .Select(NormalizeProbePath)
-                .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+            var probeRoutes = inventory.Routes
+                .Where(r => !r.Method.Equals("GQL", StringComparison.OrdinalIgnoreCase))
+                .Select(r => new ProbeRoute(
+                    r.Method,
+                    NormalizeProbePath(r),
+                    r.AllowAnonymous,
+                    r.OwnerTokenGuarded))
+                .Where(r => !string.IsNullOrWhiteSpace(r.Path))
+                .GroupBy(r => $"{r.Method}|{r.Path}", StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
                 .Take(120)
+                .ToList();
+            var probePaths = probeRoutes
+                .Select(r => r.Path)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             var findings = new List<ScanFindingDto>();
@@ -140,9 +158,16 @@ public static partial class SourceRouteInventoryAnalyzer
 
             foreach (var candidate in inventory.AuthzCandidates.Take(MaxAuthzCandidates))
             {
-                findings.Add(Finding("Medium", "source.authz.candidate",
-                    P(("observed", $"Possible object-id route without nearby tenant/org guard: {candidate.Method} {candidate.Path} ({candidate.File}:{candidate.Line})."),
-                        ("impact", "May allow BOLA/IDOR or cross-organization access — confirm with dual-account runtime tests."),
+                // Owner-token / scan-token gates are not classic tenant BOLA — keep as Low hint.
+                var severity = candidate.OwnerTokenGuarded ? "Low" : "Medium";
+                var code = candidate.OwnerTokenGuarded ? "source.authz.owner_token" : "source.authz.candidate";
+                findings.Add(Finding(severity, code,
+                    P(("observed", candidate.OwnerTokenGuarded
+                            ? $"Object-id route uses owner/scan-token style guard (not org tenant): {candidate.Method} {candidate.Path} ({candidate.File}:{candidate.Line})."
+                            : $"Possible object-id route without nearby tenant/org guard: {candidate.Method} {candidate.Path} ({candidate.File}:{candidate.Line})."),
+                        ("impact", candidate.OwnerTokenGuarded
+                            ? "Verify token binding is mandatory and cannot be bypassed with another owner's id."
+                            : "May allow BOLA/IDOR or cross-organization access — confirm with dual-account runtime tests."),
                         ("path", candidate.Path),
                         ("file", candidate.File),
                         ("line", candidate.Line.ToString())),
@@ -182,7 +207,7 @@ public static partial class SourceRouteInventoryAnalyzer
                 logger.LogWarning(ex, "Failed to store source inventory artifact for scan {ScanId}", scanId);
             }
 
-            return new InventoryResult(findings, probePaths, artifactJson);
+            return new InventoryResult(findings, probePaths, artifactJson, probeRoutes);
         }
         catch (OperationCanceledException)
         {
@@ -200,7 +225,7 @@ public static partial class SourceRouteInventoryAnalyzer
                         ("impact", "Source-assisted enrichment skipped."),
                         ("repository", MaskRepo(source.RepositoryUrl))),
                     null)
-            ], [], null);
+            ], [], null, []);
         }
         finally
         {
@@ -350,8 +375,20 @@ public static partial class SourceRouteInventoryAnalyzer
         }
     }
 
-    private sealed record RouteHit(string Method, string Path, string File, int Line, bool HasObjectId);
-    private sealed record AuthzCandidate(string Method, string Path, string File, int Line);
+    private sealed record RouteHit(
+        string Method,
+        string Path,
+        string File,
+        int Line,
+        bool HasObjectId,
+        bool AllowAnonymous = false,
+        bool OwnerTokenGuarded = false);
+    private sealed record AuthzCandidate(
+        string Method,
+        string Path,
+        string File,
+        int Line,
+        bool OwnerTokenGuarded = false);
     private sealed record Extracted(IReadOnlyList<RouteHit> Routes, IReadOnlyList<AuthzCandidate> AuthzCandidates, int FilesScanned);
 
     private static Extracted ExtractRoutes(string root, CancellationToken cancellationToken)
@@ -484,6 +521,9 @@ public static partial class SourceRouteInventoryAnalyzer
             ? cm.Groups["name"].Value
             : controllerName + "Controller";
         var classRoute = ResolveClassRoute(className, classRoutes, classBases);
+        var classAllowAnonymous = ClassHasAllowAnonymous(text, className);
+        var classAuthorize = ClassHasAuthorize(text, className)
+                             || BaseDeclaresAuthorize(className, classBases, classRoutes);
 
         foreach (Match m in CsHttpAttributeRegex().Matches(text))
         {
@@ -499,10 +539,15 @@ public static partial class SourceRouteInventoryAnalyzer
             var action = m.Groups["path"].Success ? m.Groups["path"].Value : "";
             var path = ComposeAspNetRoute(classRoute, controllerName, action);
             var line = LineOf(text, m.Index);
-            var hit = new RouteHit(method, path, file, line, HasObjectId(path));
+            var allowAnon = MethodHasAllowAnonymous(text, m.Index) || classAllowAnonymous;
+            var ownerToken = LooksOwnerTokenGuarded(text, m.Index);
+            var hit = new RouteHit(method, path, file, line, HasObjectId(path), allowAnon, ownerToken);
             routes.Add(hit);
+            // Skip BOLA candidate when route is intentionally anonymous-public without object id,
+            // or when a tenant/org guard is present. Owner-token routes still emit a Low hint.
             if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
-                authz.Add(new AuthzCandidate(method, path, file, line));
+                authz.Add(new AuthzCandidate(method, path, file, line, ownerToken));
+            _ = classAuthorize; // reserved for future force-auth findings
         }
 
         foreach (Match m in CsMapRegex().Matches(text))
@@ -510,11 +555,60 @@ public static partial class SourceRouteInventoryAnalyzer
             var method = m.Groups["method"].Value.ToUpperInvariant();
             var path = NormalizeRouteTemplate(m.Groups["path"].Value);
             var line = LineOf(text, m.Index);
-            var hit = new RouteHit(method, path, file, line, HasObjectId(path));
+            var allowAnon = MethodHasAllowAnonymous(text, m.Index) || classAllowAnonymous;
+            var ownerToken = LooksOwnerTokenGuarded(text, m.Index);
+            var hit = new RouteHit(method, path, file, line, HasObjectId(path), allowAnon, ownerToken);
             routes.Add(hit);
             if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
-                authz.Add(new AuthzCandidate(method, path, file, line));
+                authz.Add(new AuthzCandidate(method, path, file, line, ownerToken));
         }
+    }
+
+    private static bool MethodHasAllowAnonymous(string text, int index)
+    {
+        var start = Math.Max(0, index - 350);
+        return AllowAnonymousRegex().IsMatch(text[start..Math.Min(text.Length, index + 80)]);
+    }
+
+    private static bool ClassHasAllowAnonymous(string text, string className)
+    {
+        var m = Regex.Match(text, $@"class\s+{Regex.Escape(className)}\b", RegexOptions.IgnoreCase);
+        if (!m.Success) return false;
+        var start = Math.Max(0, m.Index - 600);
+        return AllowAnonymousRegex().IsMatch(text[start..m.Index]);
+    }
+
+    private static bool ClassHasAuthorize(string text, string className)
+    {
+        var m = Regex.Match(text, $@"class\s+{Regex.Escape(className)}\b", RegexOptions.IgnoreCase);
+        if (!m.Success) return false;
+        var start = Math.Max(0, m.Index - 600);
+        return AuthorizeRegex().IsMatch(text[start..m.Index]);
+    }
+
+    private static bool BaseDeclaresAuthorize(
+        string className,
+        IReadOnlyDictionary<string, string> classBases,
+        IReadOnlyDictionary<string, string> _)
+    {
+        // Heuristic: Security Portal BaseController is [Authorize]; treat known base name as authorized.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var current = className;
+        while (!string.IsNullOrWhiteSpace(current) && seen.Add(current))
+        {
+            if (current.Equals("BaseController", StringComparison.OrdinalIgnoreCase)
+                || current.Equals("ControllerBase", StringComparison.OrdinalIgnoreCase)
+                && seen.Contains("BaseController"))
+            {
+                if (current.Equals("BaseController", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            if (current.Equals("BaseController", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!classBases.TryGetValue(current, out current))
+                break;
+        }
+        return false;
     }
 
     /// <summary>Compose ASP.NET Core [Route] + [controller] + action template into a concrete path.</summary>
@@ -586,6 +680,13 @@ public static partial class SourceRouteInventoryAnalyzer
         var end = Math.Min(text.Length, index + 1200);
         var window = text[start..end];
         return TenantGuardRegex().IsMatch(window);
+    }
+
+    private static bool LooksOwnerTokenGuarded(string text, int index)
+    {
+        var start = Math.Max(0, index - 400);
+        var end = Math.Min(text.Length, index + 1600);
+        return OwnerTokenGuardRegex().IsMatch(text[start..end]);
     }
 
     private static string NormalizeProbePath(RouteHit route)
@@ -776,4 +877,15 @@ public static partial class SourceRouteInventoryAnalyzer
         """ClinicId|OrganizationId|OrgId|TenantId|HospitalId|EnsureSameOrg|EnsureOrg|BelongToOrg|CurrentClinic|RequireOrganization""",
         RegexOptions.IgnoreCase)]
     private static partial Regex TenantGuardRegex();
+
+    [GeneratedRegex(
+        """OwnerToken|MatchesOwnerToken|X-Scan-Token|EnsureAccess|AccessToken|scan owner|OwnerTokenHash""",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex OwnerTokenGuardRegex();
+
+    [GeneratedRegex("""\[AllowAnonymous\]""", RegexOptions.IgnoreCase)]
+    private static partial Regex AllowAnonymousRegex();
+
+    [GeneratedRegex("""\[Authorize(?:\([^\]]*\))?\]""", RegexOptions.IgnoreCase)]
+    private static partial Regex AuthorizeRegex();
 }
