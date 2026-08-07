@@ -61,13 +61,28 @@ public static partial class SourceRouteInventoryAnalyzer
         var cloneDir = Path.Combine(workRoot, "repo");
         string? token = null;
 
+        var usedLocalWorkspace = false;
         try
         {
             token = string.IsNullOrWhiteSpace(source.TokenCipher)
                 ? null
                 : secretProtector.Unprotect(source.TokenCipher);
 
-            var clone = await CloneAsync(source.RepositoryUrl!, source.Branch, token, cloneDir, cancellationToken);
+            CloneOutcome clone;
+            if (TryResolveLocalSource(source.RepositoryUrl, out var localRoot))
+            {
+                usedLocalWorkspace = true;
+                cloneDir = localRoot!;
+                clone = new CloneOutcome(true, "local-workspace", "workspace");
+                logger.LogInformation(
+                    "Using local source root {Root} for scan {ScanId} (SECURITYPORTAL_LOCAL_SOURCE_ROOT)",
+                    localRoot, scanId);
+            }
+            else
+            {
+                clone = await CloneAsync(source.RepositoryUrl!, source.Branch, token, cloneDir, cancellationToken);
+            }
+
             if (!clone.Ok)
             {
                 return new InventoryResult(
@@ -116,7 +131,7 @@ public static partial class SourceRouteInventoryAnalyzer
                 var sample = string.Join("; ", inventory.Routes.Take(MaxRoutesInFinding).Select(r => $"{r.Method} {r.Path}"));
                 findings.Add(Finding("Info", "source.routes.found",
                     P(("observed", $"Found {inventory.Routes.Count} route(s) from source ({inventory.FilesScanned} files). Sample: {sample}"),
-                        ("impact", "Discovered paths will enrich authenticated path probes when available."),
+                        ("impact", "Discovered paths enrich anonymous API probes, directory discovery, and Nuclei URL targets."),
                         ("repository", MaskRepo(source.RepositoryUrl)),
                         ("commit", clone.Commit ?? "unknown"),
                         ("routeCount", inventory.Routes.Count.ToString())),
@@ -189,8 +204,40 @@ public static partial class SourceRouteInventoryAnalyzer
         }
         finally
         {
-            TryDelete(workRoot);
+            // Never delete the developer workspace when LOCAL_SOURCE_ROOT was used.
+            if (!usedLocalWorkspace)
+                TryDelete(workRoot);
         }
+    }
+
+    /// <summary>
+    /// Lab helper: SECURITYPORTAL_ALLOW_LOCAL_SOURCE=1 + SECURITYPORTAL_LOCAL_SOURCE_ROOT=/path
+    /// when the configured repository URL refers to the same project (e.g. Security_scan).
+    /// </summary>
+    private static bool TryResolveLocalSource(string? repositoryUrl, out string? localRoot)
+    {
+        localRoot = null;
+        if (!string.Equals(Environment.GetEnvironmentVariable("SECURITYPORTAL_ALLOW_LOCAL_SOURCE"), "1",
+                StringComparison.Ordinal))
+            return false;
+
+        var root = Environment.GetEnvironmentVariable("SECURITYPORTAL_LOCAL_SOURCE_ROOT");
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(repositoryUrl))
+            return false;
+
+        var marker = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, '/'));
+        if (string.IsNullOrWhiteSpace(marker))
+            marker = "Security_scan";
+
+        if (!repositoryUrl.Contains(marker, StringComparison.OrdinalIgnoreCase)
+            && !repositoryUrl.Contains("local://", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        localRoot = Path.GetFullPath(root);
+        return true;
     }
 
     private sealed record CloneOutcome(bool Ok, string Message, string? Commit);
@@ -312,6 +359,9 @@ public static partial class SourceRouteInventoryAnalyzer
         var routes = new List<RouteHit>();
         var authz = new List<AuthzCandidate>();
         var filesScanned = 0;
+        var classRoutes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var classBases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var csharpFiles = new List<(string Relative, string Text)>();
 
         foreach (var file in EnumerateCodeFiles(root))
         {
@@ -334,7 +384,10 @@ public static partial class SourceRouteInventoryAnalyzer
             var ext = Path.GetExtension(file);
 
             if (ext is ".cs")
-                ScanCsharp(text, relative, routes, authz);
+            {
+                csharpFiles.Add((relative, text));
+                CollectCsharpTypeRoutes(text, classRoutes, classBases);
+            }
             else if (ext is ".ts" or ".tsx" or ".js" or ".jsx")
                 ScanJsTs(text, relative, routes, authz);
             else if (ext is ".json" or ".yaml" or ".yml")
@@ -365,6 +418,9 @@ public static partial class SourceRouteInventoryAnalyzer
             }
         }
 
+        foreach (var (relative, text) in csharpFiles)
+            ScanCsharp(text, relative, routes, authz, classRoutes, classBases);
+
         var deduped = routes
             .GroupBy(r => $"{r.Method}|{r.Path}", StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
@@ -374,20 +430,74 @@ public static partial class SourceRouteInventoryAnalyzer
         return new Extracted(deduped, authz, filesScanned);
     }
 
-    private static void ScanCsharp(string text, string file, List<RouteHit> routes, List<AuthzCandidate> authz)
+    private static void CollectCsharpTypeRoutes(
+        string text,
+        Dictionary<string, string> classRoutes,
+        Dictionary<string, string> classBases)
     {
+        foreach (Match m in CsClassDeclRegex().Matches(text))
+        {
+            var name = m.Groups["name"].Value;
+            if (m.Groups["base"].Success)
+                classBases[name] = m.Groups["base"].Value;
+
+            // Nearest [Route("...")] before the class keyword in a small window.
+            var windowStart = Math.Max(0, m.Index - 500);
+            var window = text[windowStart..m.Index];
+            var routeMatches = CsRouteAttributeRegex().Matches(window);
+            if (routeMatches.Count > 0)
+                classRoutes[name] = routeMatches[^1].Groups["path"].Value;
+        }
+    }
+
+    private static string? ResolveClassRoute(
+        string className,
+        IReadOnlyDictionary<string, string> classRoutes,
+        IReadOnlyDictionary<string, string> classBases)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var current = className;
+        while (!string.IsNullOrWhiteSpace(current) && seen.Add(current))
+        {
+            if (classRoutes.TryGetValue(current, out var route))
+                return route;
+            if (!classBases.TryGetValue(current, out current))
+                break;
+        }
+
+        return null;
+    }
+
+    private static void ScanCsharp(
+        string text,
+        string file,
+        List<RouteHit> routes,
+        List<AuthzCandidate> authz,
+        IReadOnlyDictionary<string, string> classRoutes,
+        IReadOnlyDictionary<string, string> classBases)
+    {
+        var controllerName = Path.GetFileNameWithoutExtension(file);
+        if (controllerName.EndsWith("Controller", StringComparison.OrdinalIgnoreCase))
+            controllerName = controllerName[..^"Controller".Length];
+
+        var className = CsClassDeclRegex().Match(text) is { Success: true } cm
+            ? cm.Groups["name"].Value
+            : controllerName + "Controller";
+        var classRoute = ResolveClassRoute(className, classRoutes, classBases);
+
         foreach (Match m in CsHttpAttributeRegex().Matches(text))
         {
             var method = m.Groups["method"].Value.ToUpperInvariant() switch
             {
-                "HTTPGET" => "GET",
-                "HTTPPOST" => "POST",
-                "HTTPPUT" => "PUT",
-                "HTTPDELETE" => "DELETE",
-                "HTTPPATCH" => "PATCH",
+                "GET" => "GET",
+                "POST" => "POST",
+                "PUT" => "PUT",
+                "DELETE" => "DELETE",
+                "PATCH" => "PATCH",
                 _ => "ANY"
             };
-            var path = NormalizeRouteTemplate(m.Groups["path"].Value);
+            var action = m.Groups["path"].Success ? m.Groups["path"].Value : "";
+            var path = ComposeAspNetRoute(classRoute, controllerName, action);
             var line = LineOf(text, m.Index);
             var hit = new RouteHit(method, path, file, line, HasObjectId(path));
             routes.Add(hit);
@@ -405,6 +515,28 @@ public static partial class SourceRouteInventoryAnalyzer
             if (hit.HasObjectId && !LooksTenantGuarded(text, m.Index))
                 authz.Add(new AuthzCandidate(method, path, file, line));
         }
+    }
+
+    /// <summary>Compose ASP.NET Core [Route] + [controller] + action template into a concrete path.</summary>
+    internal static string ComposeAspNetRoute(string? classRoute, string controllerName, string? actionPath)
+    {
+        var action = string.IsNullOrWhiteSpace(actionPath)
+            ? ""
+            : NormalizeRouteTemplate(actionPath).TrimStart('/');
+
+        if (string.IsNullOrWhiteSpace(classRoute))
+            return string.IsNullOrWhiteSpace(action) ? "/" + controllerName.ToLowerInvariant() : NormalizeRouteTemplate(action);
+
+        var template = classRoute.Trim().Trim('"');
+        template = Regex.Replace(template, @"\{version(?::[^}]*)?\}", "1", RegexOptions.IgnoreCase);
+        template = Regex.Replace(template, @"\[controller\]", controllerName, RegexOptions.IgnoreCase);
+        template = Regex.Replace(template, @"\[action\]", string.IsNullOrWhiteSpace(action) ? "" : action.Split('/')[0],
+            RegexOptions.IgnoreCase);
+        template = template.Replace("//", "/", StringComparison.Ordinal).Trim('/');
+
+        var combined = string.IsNullOrWhiteSpace(action) ? template : $"{template}/{action}";
+        combined = Regex.Replace(combined, @"\{([^}:]+)(?::[^}]*)?\}", "{$1}");
+        return NormalizeRouteTemplate(combined);
     }
 
     private static void ScanJsTs(string text, string file, List<RouteHit> routes, List<AuthzCandidate> authz)
@@ -605,8 +737,22 @@ public static partial class SourceRouteInventoryAnalyzer
             code,
             parameters);
 
-    [GeneratedRegex("""\[Http(?<method>Get|Post|Put|Delete|Patch)\(\s*"(?<path>[^"]+)"\s*\)\]""", RegexOptions.IgnoreCase)]
+    // Matches [HttpGet], [HttpGet("x")], [HttpGet("{id:guid}")], etc.
+    [GeneratedRegex(
+        """\[Http(?<method>Get|Post|Put|Delete|Patch)(?:\(\s*"(?<path>[^"]*)"\s*\))?\]""",
+        RegexOptions.IgnoreCase)]
     private static partial Regex CsHttpAttributeRegex();
+
+    [GeneratedRegex("""\[Route\(\s*"(?<path>[^"]+)"\s*\)\]""", RegexOptions.IgnoreCase)]
+    private static partial Regex CsRouteAttributeRegex();
+
+    // Supports classic and C# primary-constructor declarations:
+    //   class Foo : Bar
+    //   class Foo(IMediator m) : Bar(m)
+    [GeneratedRegex(
+        """(?:public\s+|internal\s+|protected\s+|abstract\s+|sealed\s+|partial\s+|static\s+)*class\s+(?<name>\w+)\s*(?:\([^;{]*?\))?\s*(?::\s*(?<base>\w+))?""",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex CsClassDeclRegex();
 
     [GeneratedRegex("""Map(?<method>Get|Post|Put|Delete|Patch)\(\s*"(?<path>[^"]+)" """, RegexOptions.IgnoreCase)]
     private static partial Regex CsMapRegex();

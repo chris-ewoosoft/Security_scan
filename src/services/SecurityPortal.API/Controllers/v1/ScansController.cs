@@ -20,8 +20,8 @@ public class ScansController(IMediator mediator) : BaseController(mediator)
     public IActionResult BuildInfo() => Ok(new
     {
         service = "SecurityPortal.API",
-        fix = "finding-quality: secondary API targets; port banner classify; deep nuclei budget; waf/whatweb wrappers",
-        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.5",
+        fix = "source-driven surface: ASP.NET route compose; runtime probes; secondary Nuclei URLs; loopback lab scan",
+        stamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.6",
         allowAutoRedirect = false,
         maxAutomaticRedirections = ScanHttpClientFactory.DefaultMaxAutomaticRedirections,
         scannersPath = ExternalToolRunner.ToolsDirectory,

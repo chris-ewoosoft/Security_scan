@@ -39,6 +39,16 @@ public static class ScanHostSafety
         EnsureSafeHost(uri.Host, fieldName);
     }
 
+    /// <summary>
+    /// Opt-in for lab/self-scan against local API (e.g. http://127.0.0.1:5088).
+    /// Set SECURITYPORTAL_ALLOW_LOOPBACK_SCAN=1 — never enable on internet-facing workers.
+    /// </summary>
+    public static bool AllowLoopbackScan =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("SECURITYPORTAL_ALLOW_LOOPBACK_SCAN"),
+            "1",
+            StringComparison.Ordinal);
+
     public static void EnsureSafeHost(string host, string fieldName = "Host")
     {
         if (string.IsNullOrWhiteSpace(host))
@@ -46,12 +56,21 @@ public static class ScanHostSafety
 
         var h = host.Trim().TrimEnd('.');
         if (BlockedHostNames.Contains(h) || h.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            if (AllowLoopbackScan && (h.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                                      || h.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)))
+                return;
             throw new DomainException($"{fieldName} '{host}' is blocked (loopback/metadata).");
+        }
 
         if (IPAddress.TryParse(h, out var ip))
         {
             if (IsBlockedIp(ip))
+            {
+                if (AllowLoopbackScan && IPAddress.IsLoopback(ip))
+                    return;
                 throw new DomainException($"{fieldName} '{host}' resolves to a blocked private/loopback/link-local address.");
+            }
             return;
         }
 
@@ -64,8 +83,12 @@ public static class ScanHostSafety
             foreach (var addr in addresses)
             {
                 if (IsBlockedIp(addr))
+                {
+                    if (AllowLoopbackScan && IPAddress.IsLoopback(addr))
+                        continue;
                     throw new DomainException(
                         $"{fieldName} '{host}' resolves to blocked address {addr} (private/loopback/metadata).");
+                }
             }
         }
         catch (DomainException)

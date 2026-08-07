@@ -195,6 +195,14 @@ public sealed class WebsiteScanProcessor(
             sourceProbePaths.AddRange(inventory.ProbePaths);
         }
 
+        // Anonymous runtime probes against source-discovered API paths (does not require login).
+        if (sourceProbePaths.Count > 0)
+        {
+            await EnsureNotCancelledAsync(scanId, cancellationToken);
+            sourceFindings.AddRange(await EvaluateSourceRouteProbesAsync(
+                client, targetUrl, sourceProbePaths, cancellationToken));
+        }
+
         if (config.Auth?.IsEnabled == true)
         {
             await EnsureNotCancelledAsync(scanId, cancellationToken);
@@ -257,6 +265,15 @@ public sealed class WebsiteScanProcessor(
 
         // Secondary API/GraphQL hosts (Clever-style backends, cookie domains) for Nuclei/Ferox/FFUF.
         var secondaryTargets = BuildSecondaryScanTargets(handler, targetUrl);
+        // Promote source-discovered API URLs onto the same fan-out list (capped).
+        foreach (var sourceUrl in BuildSourceAbsoluteUrls(targetUrl, sourceProbePaths).Take(8))
+        {
+            if (!secondaryTargets.Any(t => string.Equals(t, sourceUrl, StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(sourceUrl.TrimEnd('/'), targetUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            {
+                secondaryTargets.Add(sourceUrl);
+            }
+        }
 
         // Prefer CVE/misconfig Nuclei before exposure scan so the larger budget is not spent first.
         var checkList = selectedChecks.ToList();
@@ -296,7 +313,7 @@ public sealed class WebsiteScanProcessor(
                 "cors-policy" => EvaluateCors(check, tools, targetUrl, corsOrigin),
                 "information-disclosure" => EvaluateDisclosure(check, tools, targetUrl, headers, server, poweredBy),
                 "port-scan" => await EvaluatePortScanAsync(check, tools, targetUrl, toolOpts.Naabu, cancellationToken),
-                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, secondaryTargets, toolOpts, cancellationToken),
+                "directory-discovery" => await EvaluateDirectoryDiscoveryAsync(deepClient, check, tools, targetUrl, secondaryTargets, sourceProbePaths, toolOpts, cancellationToken),
                 "sensitive-file-scan" => await EvaluateSensitiveFilesAsync(deepClient, check, tools, targetUrl, secondaryTargets, toolOpts.Nuclei, cancellationToken),
                 "vulnerability-scan" => await EvaluateVulnerabilityAsync(check, tools, targetUrl, secondaryTargets, toolOpts.Nuclei, cancellationToken),
                 "technology-detection" => await EvaluateTechnologyAsync(check, tools, headers, server, poweredBy, targetUrl, cancellationToken),
@@ -1698,12 +1715,140 @@ public sealed class WebsiteScanProcessor(
         }
     }
 
+    private static List<string> BuildSourceAbsoluteUrls(string targetUrl, IReadOnlyList<string> sourceProbePaths)
+    {
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var baseUri))
+            return [];
+
+        var results = new List<string>();
+        foreach (var path in sourceProbePaths)
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            try
+            {
+                var relative = path.TrimStart('/');
+                var url = new Uri(baseUri, relative).ToString();
+                ScanHostSafety.EnsureSafeHttpTarget(url);
+                if (!results.Contains(url, StringComparer.OrdinalIgnoreCase))
+                    results.Add(url);
+            }
+            catch
+            {
+                // skip unsafe / malformed
+            }
+        }
+
+        return results;
+    }
+
+    private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateSourceRouteProbesAsync(
+        HttpClient client,
+        string targetUrl,
+        IReadOnlyList<string> sourceProbePaths,
+        CancellationToken cancellationToken)
+    {
+        var urls = BuildSourceAbsoluteUrls(targetUrl, sourceProbePaths).Take(40).ToList();
+        if (urls.Count == 0)
+            return [];
+
+        var exposed = new List<(string Url, int Status, string Note)>();
+        var authRequired = new List<(string Url, int Status)>();
+        var other = new List<(string Url, int Status)>();
+
+        foreach (var url in urls)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                using var resp = await SendWithSafeRedirectsAsync(
+                    client, req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                var status = (int)resp.StatusCode;
+                var path = new Uri(url).AbsolutePath;
+
+                if (status is 401 or 403)
+                {
+                    authRequired.Add((url, status));
+                    continue;
+                }
+
+                if (status is >= 200 and < 300)
+                {
+                    // Anonymous 2xx on API-like path from source is a trustworthy exposure signal.
+                    var sensitive = path.Contains("/auth", StringComparison.OrdinalIgnoreCase)
+                                    || path.Contains("password", StringComparison.OrdinalIgnoreCase)
+                                    || path.Contains("admin", StringComparison.OrdinalIgnoreCase)
+                                    || path.Contains("token", StringComparison.OrdinalIgnoreCase)
+                                    || path.Contains("secret", StringComparison.OrdinalIgnoreCase);
+                    exposed.Add((url, status, sensitive ? "sensitive-api" : "api"));
+                    continue;
+                }
+
+                if (status is not (404 or 405))
+                    other.Add((url, status));
+            }
+            catch
+            {
+                // ignore probe errors
+            }
+        }
+
+        var findings = new List<ScanFindingDto>();
+        var check = new ScanCheckDefinition(
+            SourceRouteInventoryAnalyzer.CheckId,
+            "Source Route Inventory",
+            "Clone Git and extract route/API inventory.",
+            ["source-analyzer", "http-probe"],
+            false,
+            "recon",
+            5);
+
+        if (exposed.Count > 0)
+        {
+            var high = exposed.Where(e => e.Note == "sensitive-api").ToList();
+            var sample = (high.Count > 0 ? high : exposed).Take(12)
+                .Select(e => $"{e.Url}({e.Status})");
+            findings.Add(Finding(check, check.Tools,
+                high.Count > 0 ? "High" : "Medium",
+                high.Count > 0 ? "source.route.sensitive_exposed" : "source.route.exposed",
+                P(("observed", $"Source-derived routes returned anonymous HTTP 2xx ({exposed.Count}/{urls.Count} probed): {string.Join(", ", sample)}"),
+                    ("impact", high.Count > 0
+                        ? "Anonymous access to auth/admin-related API routes increases account takeover and data exposure risk."
+                        : "Anonymous API surface discovered from source should be reviewed for missing authorization."),
+                    ("targetUrl", targetUrl),
+                    ("probed", urls.Count.ToString())),
+                string.Join("; ", exposed.Take(40).Select(e => $"{e.Url} -> {e.Status} [{e.Note}]"))));
+        }
+
+        if (authRequired.Count > 0)
+        {
+            findings.Add(Finding(check, check.Tools, "Info", "source.route.auth_required",
+                P(("observed", $"{authRequired.Count} source-derived route(s) require auth (401/403). Sample: {string.Join(", ", authRequired.Take(8).Select(a => $"{a.Url}({a.Status})"))}"),
+                    ("impact", "These endpoints exist at runtime; follow up with authenticated testing."),
+                    ("targetUrl", targetUrl)),
+                string.Join("; ", authRequired.Take(30).Select(a => $"{a.Url} -> {a.Status}"))));
+        }
+
+        if (exposed.Count == 0 && authRequired.Count == 0)
+        {
+            findings.Add(Finding(check, check.Tools, "Info", "source.route.probe_none",
+                P(("observed", $"Probed {urls.Count} source-derived path(s) on {targetUrl}; no anonymous 2xx or 401/403 signals."),
+                    ("targetUrl", targetUrl)),
+                other.Count == 0
+                    ? $"probed={urls.Count}"
+                    : $"other={string.Join(',', other.Take(12).Select(o => $"{o.Status}"))}"));
+        }
+
+        return findings;
+    }
+
     private static async Task<IReadOnlyList<ScanFindingDto>> EvaluateDirectoryDiscoveryAsync(
         HttpClient client,
         ScanCheckDefinition check,
         IReadOnlyList<string> tools,
         string targetUrl,
         IReadOnlyList<string> secondaryTargets,
+        IReadOnlyList<string> sourceProbePaths,
         ScanToolOptions toolOpts,
         CancellationToken cancellationToken)
     {
@@ -1806,16 +1951,19 @@ public sealed class WebsiteScanProcessor(
             ];
         }
 
-        // Built-in wordlist on primary (+ secondary origins, capped).
+        // Built-in wordlist + source-derived paths on primary (+ secondary origins, capped).
         var found = new List<(string Path, int Code, string Url, string Note)>();
         foreach (var origin in origins.Take(2))
         {
             var baseUri = new Uri(origin);
             var paths = new[]
-            {
-                "admin", "login", "dashboard", "api", "swagger", "graphql",
-                "backup", "uploads", "static", "assets", "wp-admin", "robots.txt", "sitemap.xml"
-            };
+                {
+                    "admin", "login", "dashboard", "api", "swagger", "graphql",
+                    "backup", "uploads", "static", "assets", "wp-admin", "robots.txt", "sitemap.xml"
+                }
+                .Concat(sourceProbePaths.Take(40))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
 
             var baseline = await ProbeUrlAsync(
                 client,

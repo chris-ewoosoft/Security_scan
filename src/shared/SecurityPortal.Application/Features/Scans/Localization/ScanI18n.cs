@@ -90,6 +90,10 @@ public static class ScanI18n
             "source.authz.candidate" => ("Possible missing tenant guard on object route", "Observed: {observed}\nImpact: {impact}\nFile: {file}:{line}\nPath: {path}", "Enforce organization/clinic ownership server-side before returning or mutating the object.", ["Review {file}:{line}", "Call the route with another organization's object id", "Expect 403/404 when ownership fails"]),
             "source.artifact.stored" => ("Route inventory artifact stored", "Observed: {observed}\nImpact: {impact}", "Retain artifacts only as long as needed; avoid storing secrets in Git history.", null),
             "source.inventory.error" => ("Source inventory error", "Observed: {observed}\nImpact: {impact}\nRepository: {repository}", "Retry with a reachable repository and valid credentials.", null),
+            "source.route.exposed" => ("Source route anonymously reachable", "Observed: {observed}\nImpact: {impact}", "Confirm each anonymous 2xx route is intentionally public; add authz where needed.", ["curl -sI \"{targetUrl}\"", "Compare with source inventory routes"]),
+            "source.route.sensitive_exposed" => ("Sensitive source route anonymously reachable", "Observed: {observed}\nImpact: {impact}", "Lock down auth/admin API routes; require authentication and authorize every action.", ["curl -sI the listed URLs without credentials", "Expect 401/403 for non-public APIs"]),
+            "source.route.auth_required" => ("Source routes require authentication", "Observed: {observed}\nImpact: {impact}", "Continue with authenticated scan coverage for these endpoints.", null),
+            "source.route.probe_none" => ("Source route probes inconclusive", "Observed: {observed}", "Verify base URL/path prefix matches the deployed API.", null),
             _ => (code, "{observed}", "", null)
         };
         var (title, detail, recommendation, steps) = template;
@@ -207,6 +211,10 @@ public static class ScanI18n
             "source.authz.candidate" => ("Nghi ngờ thiếu guard tenant trên route có object id", "Quan sát: {observed}\nTác động: {impact}\nFile: {file}:{line}\nPath: {path}", "Bắt buộc kiểm tra ownership org/clinic phía server trước khi đọc/sửa object.", ["Xem {file}:{line}", "Gọi route với object id của org khác", "Kỳ vọng 403/404 khi ownership sai"]),
             "source.artifact.stored" => ("Đã lưu artifact inventory route", "Quan sát: {observed}\nTác động: {impact}", "Chỉ giữ artifact trong thời gian cần thiết; không commit secret vào Git.", null),
             "source.inventory.error" => ("Lỗi inventory source", "Quan sát: {observed}\nTác động: {impact}\nRepo: {repository}", "Thử lại với repo truy cập được và credential hợp lệ.", null),
+            "source.route.exposed" => ("Route từ source truy cập được ẩn danh", "Quan sát: {observed}\nTác động: {impact}", "Xác nhận từng route 2xx ẩn danh là cố ý public; bổ sung authz nếu cần.", ["curl -sI \"{targetUrl}\"", "Đối chiếu với inventory route từ source"]),
+            "source.route.sensitive_exposed" => ("Route nhạy cảm từ source truy cập được ẩn danh", "Quan sát: {observed}\nTác động: {impact}", "Khóa API auth/admin; bắt buộc authentication và authorize mọi action.", ["curl -sI các URL đã liệt kê không kèm credential", "Kỳ vọng 401/403 với API không public"]),
+            "source.route.auth_required" => ("Route từ source yêu cầu xác thực", "Quan sát: {observed}\nTác động: {impact}", "Tiếp tục phủ bằng authenticated scan cho các endpoint này.", null),
+            "source.route.probe_none" => ("Probe route từ source chưa có tín hiệu rõ", "Quan sát: {observed}", "Kiểm tra base URL/path prefix khớp API đang deploy.", null),
             _ => (title, detail, recommendation, steps)
         };
 
