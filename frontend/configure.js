@@ -45,21 +45,8 @@ window.SecurityPortalConfigure = (() => {
               <h2>${escapeHtml(t("config.tools"))}</h2>
               <span class="muted">${escapeHtml(t("config.toolsHint"))}</span>
             </div>
-            <div data-role="tools-list" class="option-grid"></div>
-          </section>
-
-          <section class="config-block" data-role="depth-block" hidden>
-            <div class="block-head">
-              <h2>${escapeHtml(t("config.depth"))}</h2>
-              <div class="preset-actions">
-                <button type="button" class="linkish" data-action="depth-quick">${escapeHtml(t("config.depthQuick"))}</button>
-                <button type="button" class="linkish" data-action="depth-balanced">${escapeHtml(t("config.depthBalanced"))}</button>
-                <button type="button" class="linkish" data-action="depth-deep">${escapeHtml(t("config.depthDeep"))}</button>
-                <button type="button" class="linkish" data-action="depth-close">${escapeHtml(t("config.depthClose"))}</button>
-              </div>
-            </div>
             <p class="muted config-preset-hint">${escapeHtml(t("config.depthHint"))}</p>
-            <div data-role="depth-panels" class="depth-panels"></div>
+            <div data-role="tools-list" class="option-grid tools-with-depth"></div>
           </section>
 
           <section class="config-block">
@@ -78,8 +65,6 @@ window.SecurityPortalConfigure = (() => {
     const form = root.querySelector('[data-role="config-form"]');
     const checksList = root.querySelector('[data-role="checks-list"]');
     const toolsList = root.querySelector('[data-role="tools-list"]');
-    const depthBlock = root.querySelector('[data-role="depth-block"]');
-    const depthPanels = root.querySelector('[data-role="depth-panels"]');
     const reportsList = root.querySelector('[data-role="reports-list"]');
     const formError = root.querySelector('[data-role="form-error"]');
     const saveBanner = root.querySelector('[data-role="save-banner"]');
@@ -148,92 +133,71 @@ window.SecurityPortalConfigure = (() => {
     }
 
     function readDepthFromForm() {
-      if (!depthPanels) return;
-      const g = (name) => depthPanels.querySelector(`[name="${name}"]`);
+      const g = (name) => form.querySelector(`[name="${name}"]`);
       const num = (name, fallback) => {
         const el = g(name);
-        const n = el ? Number(el.value) : NaN;
+        if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return fallback;
+        const n = Number(el.value);
         return Number.isFinite(n) ? n : fallback;
       };
       const str = (name, fallback) => {
         const el = g(name);
-        return el ? String(el.value || "").trim() : fallback;
+        if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return fallback;
+        return String(el.value || "").trim() || fallback;
       };
-      toolOptionsState = ConfigStore.mergeToolOptions({
-        nuclei: {
-          profile: str("nuclei.profile", "balanced"),
-          severity: str("nuclei.severity", "medium,high,critical"),
-          tags: str("nuclei.tags", ""),
-          exposureTags: str("nuclei.exposureTags", "exposure,config,backup,token,key,file"),
-          concurrency: num("nuclei.concurrency", 25),
-          rateLimit: num("nuclei.rateLimit", 150),
-          timeoutSeconds: num("nuclei.timeoutSeconds", 8),
-          retries: num("nuclei.retries", 1),
-          maxDurationSeconds: num("nuclei.maxDurationSeconds", 120),
-        },
-        naabu: {
-          ports: str("naabu.ports", ConfigStore.DEFAULT_TOOL_OPTIONS.naabu.ports),
-          rate: num("naabu.rate", 200),
-        },
-        feroxbuster: {
-          depth: num("feroxbuster.depth", 1),
-          threads: num("feroxbuster.threads", 20),
-          timeoutSeconds: num("feroxbuster.timeoutSeconds", 5),
-          maxDurationSeconds: num("feroxbuster.maxDurationSeconds", 90),
-        },
-        ffuf: {
-          threads: num("ffuf.threads", 20),
-          timeoutSeconds: num("ffuf.timeoutSeconds", 5),
-          maxDurationSeconds: num("ffuf.maxDurationSeconds", 90),
-          matchCodes: str("ffuf.matchCodes", "200,204,301,401,403"),
-        },
-      });
+      // Only merge fields that are currently rendered (open panel); keep other tool opts.
+      const patch = {};
+      if (form.querySelector('[name="nuclei.profile"]')) {
+        patch.nuclei = {
+          profile: str("nuclei.profile", toolOptionsState.nuclei.profile),
+          severity: str("nuclei.severity", toolOptionsState.nuclei.severity),
+          tags: str("nuclei.tags", toolOptionsState.nuclei.tags || ""),
+          exposureTags: str("nuclei.exposureTags", toolOptionsState.nuclei.exposureTags),
+          concurrency: num("nuclei.concurrency", toolOptionsState.nuclei.concurrency),
+          rateLimit: num("nuclei.rateLimit", toolOptionsState.nuclei.rateLimit),
+          timeoutSeconds: num("nuclei.timeoutSeconds", toolOptionsState.nuclei.timeoutSeconds),
+          retries: num("nuclei.retries", toolOptionsState.nuclei.retries),
+          maxDurationSeconds: num("nuclei.maxDurationSeconds", toolOptionsState.nuclei.maxDurationSeconds),
+        };
+      }
+      if (form.querySelector('[name="naabu.ports"]')) {
+        patch.naabu = {
+          ports: str("naabu.ports", toolOptionsState.naabu.ports),
+          rate: num("naabu.rate", toolOptionsState.naabu.rate),
+        };
+      }
+      if (form.querySelector('[name="feroxbuster.depth"]')) {
+        patch.feroxbuster = {
+          depth: num("feroxbuster.depth", toolOptionsState.feroxbuster.depth),
+          threads: num("feroxbuster.threads", toolOptionsState.feroxbuster.threads),
+          timeoutSeconds: num("feroxbuster.timeoutSeconds", toolOptionsState.feroxbuster.timeoutSeconds),
+          maxDurationSeconds: num("feroxbuster.maxDurationSeconds", toolOptionsState.feroxbuster.maxDurationSeconds),
+        };
+      }
+      if (form.querySelector('[name="ffuf.threads"]')) {
+        patch.ffuf = {
+          threads: num("ffuf.threads", toolOptionsState.ffuf.threads),
+          timeoutSeconds: num("ffuf.timeoutSeconds", toolOptionsState.ffuf.timeoutSeconds),
+          maxDurationSeconds: num("ffuf.maxDurationSeconds", toolOptionsState.ffuf.maxDurationSeconds),
+          matchCodes: str("ffuf.matchCodes", toolOptionsState.ffuf.matchCodes),
+        };
+      }
+      if (Object.keys(patch).length) {
+        toolOptionsState = ConfigStore.mergeToolOptions({ ...toolOptionsState, ...patch });
+      }
     }
 
     function selectedToolsSet() {
       return new Set(selectedValues("tools"));
     }
 
-    function syncDetailButtons() {
-      toolsList?.querySelectorAll("[data-action='tool-detail']").forEach((btn) => {
-        const id = btn.getAttribute("data-tool");
-        const active = id && id === openDepthTool;
-        btn.classList.toggle("is-active", !!active);
-        btn.setAttribute("aria-expanded", active ? "true" : "false");
-        btn.textContent = active ? t("config.depthHide") : t("config.toolDetail");
-      });
-    }
-
-    function renderDepthPanels() {
-      if (!depthPanels || !depthBlock) return;
-
-      if (!openDepthTool || !DEPTH_TOOLS.has(openDepthTool)) {
-        depthBlock.hidden = true;
-        depthPanels.innerHTML = "";
-        syncDetailButtons();
-        return;
-      }
-
-      // Keep depth values if the tool is still selected; otherwise close.
-      const selected = selectedToolsSet();
-      if (!selected.has(openDepthTool)) {
-        openDepthTool = null;
-        depthBlock.hidden = true;
-        depthPanels.innerHTML = "";
-        syncDetailButtons();
-        return;
-      }
-
-      depthBlock.hidden = false;
+    function buildDepthPanelHtml(toolId) {
       const o = toolOptionsState;
-      const toolId = openDepthTool;
-
       const field = (label, name, value, attrs = "") => `
         <label class="depth-field">
           <span class="depth-field-label">${escapeHtml(label)}</span>
           <input name="${escapeHtml(name)}" value="${escapeHtml(String(value ?? ""))}" ${attrs} />
         </label>`;
-
       const select = (label, name, value, options) => `
         <label class="depth-field">
           <span class="depth-field-label">${escapeHtml(label)}</span>
@@ -243,10 +207,20 @@ window.SecurityPortalConfigure = (() => {
           </select>
         </label>`;
 
-      let panel = "";
+      const presets = `
+        <div class="depth-presets">
+          <span class="depth-presets-label">${escapeHtml(t("config.depth"))}</span>
+          <div class="preset-actions">
+            <button type="button" class="linkish" data-action="depth-quick">${escapeHtml(t("config.depthQuick"))}</button>
+            <button type="button" class="linkish" data-action="depth-balanced">${escapeHtml(t("config.depthBalanced"))}</button>
+            <button type="button" class="linkish" data-action="depth-deep">${escapeHtml(t("config.depthDeep"))}</button>
+          </div>
+        </div>`;
+
       if (toolId === "nuclei") {
-        panel = `
-          <div class="depth-panel">
+        return `
+          <div class="depth-panel" data-depth-for="nuclei">
+            ${presets}
             <h3 class="depth-panel-title">Nuclei <span class="depth-panel-sub">${escapeHtml(t("config.depthNucleiSummary"))}</span></h3>
             <div class="depth-grid">
               ${select(t("config.nucleiProfile"), "nuclei.profile", o.nuclei.profile, [
@@ -265,18 +239,22 @@ window.SecurityPortalConfigure = (() => {
             </div>
             <p class="depth-note">${escapeHtml(t("config.nucleiNote"))}</p>
           </div>`;
-      } else if (toolId === "naabu") {
-        panel = `
-          <div class="depth-panel">
+      }
+      if (toolId === "naabu") {
+        return `
+          <div class="depth-panel" data-depth-for="naabu">
+            ${presets}
             <h3 class="depth-panel-title">Naabu <span class="depth-panel-sub">${escapeHtml(t("config.depthNaabuSummary"))}</span></h3>
             <div class="depth-grid">
               ${field(t("config.naabuPorts"), "naabu.ports", o.naabu.ports)}
               ${field(t("config.naabuRate"), "naabu.rate", o.naabu.rate, `type="number" min="10" max="5000"`)}
             </div>
           </div>`;
-      } else if (toolId === "feroxbuster") {
-        panel = `
-          <div class="depth-panel">
+      }
+      if (toolId === "feroxbuster") {
+        return `
+          <div class="depth-panel" data-depth-for="feroxbuster">
+            ${presets}
             <h3 class="depth-panel-title">Feroxbuster <span class="depth-panel-sub">${escapeHtml(t("config.depthFeroxSummary"))}</span></h3>
             <div class="depth-grid">
               ${field(t("config.feroxDepth"), "feroxbuster.depth", o.feroxbuster.depth, `type="number" min="0" max="4"`)}
@@ -285,9 +263,11 @@ window.SecurityPortalConfigure = (() => {
               ${field(t("config.feroxMaxDuration"), "feroxbuster.maxDurationSeconds", o.feroxbuster.maxDurationSeconds, `type="number" min="30" max="600"`)}
             </div>
           </div>`;
-      } else if (toolId === "ffuf") {
-        panel = `
-          <div class="depth-panel">
+      }
+      if (toolId === "ffuf") {
+        return `
+          <div class="depth-panel" data-depth-for="ffuf">
+            ${presets}
             <h3 class="depth-panel-title">FFUF <span class="depth-panel-sub">${escapeHtml(t("config.depthFfufSummary"))}</span></h3>
             <div class="depth-grid">
               ${field(t("config.ffufThreads"), "ffuf.threads", o.ffuf.threads, `type="number" min="1" max="100"`)}
@@ -297,10 +277,41 @@ window.SecurityPortalConfigure = (() => {
             </div>
           </div>`;
       }
+      return "";
+    }
 
-      depthPanels.innerHTML = panel;
+    function syncDetailButtons() {
+      toolsList?.querySelectorAll("[data-action='tool-detail']").forEach((btn) => {
+        const id = btn.getAttribute("data-tool");
+        const active = id && id === openDepthTool;
+        btn.classList.toggle("is-active", !!active);
+        btn.setAttribute("aria-expanded", active ? "true" : "false");
+        btn.textContent = active ? t("config.depthHide") : t("config.toolDetail");
+      });
+    }
+
+    function renderDepthPanels() {
+      if (!toolsList) return;
+
+      if (openDepthTool && !selectedToolsSet().has(openDepthTool)) {
+        openDepthTool = null;
+      }
+
+      toolsList.querySelectorAll("[data-role='tool-depth-slot']").forEach((slot) => {
+        const toolId = slot.getAttribute("data-tool");
+        const open = toolId && toolId === openDepthTool;
+        const card = slot.closest(".tool-option");
+        if (card) card.classList.toggle("is-depth-open", !!open);
+        if (open) {
+          slot.hidden = false;
+          slot.innerHTML = buildDepthPanelHtml(toolId);
+          slot.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } else {
+          slot.hidden = true;
+          slot.innerHTML = "";
+        }
+      });
       syncDetailButtons();
-      depthBlock.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
     function showError(message) {
@@ -425,6 +436,9 @@ window.SecurityPortalConfigure = (() => {
         const detailBtn = hasDepth
           ? `<button type="button" class="tool-detail-btn" data-action="tool-detail" data-tool="${escapeHtml(tool.id)}" aria-expanded="false">${escapeHtml(t("config.toolDetail"))}</button>`
           : "";
+        const depthSlot = hasDepth
+          ? `<div class="tool-depth-slot" data-role="tool-depth-slot" data-tool="${escapeHtml(tool.id)}" hidden></div>`
+          : "";
         return `
         <div class="tool-option${hasDepth ? " has-depth" : ""}">
           <label class="tool-option-main">
@@ -435,6 +449,7 @@ window.SecurityPortalConfigure = (() => {
             </span>
           </label>
           ${detailBtn}
+          ${depthSlot}
         </div>`;
       }).join("");
 
