@@ -24,9 +24,25 @@ docker start -a "${CID}" || true
 docker cp "${CID}:/opt/scanners/bin" "${OUT}/"
 docker cp "${CID}:/opt/scanners/wordlists" "${OUT}/" 2>/dev/null || mkdir -p "${OUT}/wordlists"
 docker cp "${CID}:/opt/scanners/pylib" "${OUT}/" 2>/dev/null || true
+docker cp "${CID}:/opt/scanners/whatweb" "${OUT}/" 2>/dev/null || true
+docker cp "${CID}:/opt/scanners/gems" "${OUT}/" 2>/dev/null || true
 
 # Make sure scripts are executable on host (Linux/macOS/Git Bash)
 find "${OUT}/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
+# Replace broken self-symlinks (e.g. wafw00f -> wafw00f) if extraction raced
+# Always rewrite wafw00f wrapper (avoids broken self-symlinks / python -m without __main__)
+printf '%s\n' '#!/bin/sh' \
+  'DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"' \
+  'export PYTHONPATH="${DIR}/pylib:${PYTHONPATH:-}"' \
+  'if [ -x "${DIR}/pylib/bin/wafw00f" ]; then exec "${DIR}/pylib/bin/wafw00f" "$@"; fi' \
+  'exec python3 - "$@" <<'"'"'PY'"'" \
+  'import sys' \
+  'from wafw00f.main import main' \
+  'sys.argv = ["wafw00f", *sys.argv[1:]]' \
+  'raise SystemExit(main())' \
+  'PY' > "${OUT}/bin/wafw00f"
+chmod +x "${OUT}/bin/wafw00f"
+chmod +x "${OUT}/pylib/bin/wafw00f" 2>/dev/null || true
 
 echo "==> Tools installed:"
 ls -la "${OUT}/bin" || true

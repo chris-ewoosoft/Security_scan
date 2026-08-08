@@ -322,11 +322,13 @@ public sealed class NucleiToolOptions
                 if (Severity is "medium,high,critical" or "")
                     Severity = "low,medium,high,critical";
                 // Keep tags actionable; xss/sqli/rce fuzz packs are too slow for portal budgets.
+                // Exposure packs run separately via sensitive-file-scan.
                 if (string.IsNullOrWhiteSpace(Tags))
-                    Tags = "cve,misconfig,exposure,vuln,default-login";
+                    Tags = "cve,misconfig,default-login";
                 if (Concurrency == 25) Concurrency = 30;
                 if (TimeoutSeconds == 8) TimeoutSeconds = 10;
-                if (MaxDurationSeconds == 120) MaxDurationSeconds = 240;
+                // Legacy deep default was 240; bump so focused deep templates can finish.
+                if (MaxDurationSeconds is 120 or 240) MaxDurationSeconds = 300;
                 if (RateLimit == 150) RateLimit = 180;
                 if (Retries == 1) Retries = 1;
                 break;

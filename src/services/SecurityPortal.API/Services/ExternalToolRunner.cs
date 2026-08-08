@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using SecurityPortal.Domain.Entities;
 
 namespace SecurityPortal.API.Services;
@@ -70,7 +71,7 @@ public static class ExternalToolRunner
 
             if (fileName.Contains(Path.DirectorySeparatorChar) || fileName.Contains(Path.AltDirectorySeparatorChar))
             {
-                if (!File.Exists(fileName))
+                if (!IsUsableToolFile(fileName))
                     return false;
             }
 
@@ -93,26 +94,59 @@ public static class ExternalToolRunner
             {
                 try { p.Kill(true); } catch { /* ignore */ }
                 // Binary exists — treat as available; version probe may hang on first run.
-                return File.Exists(fileName);
+                return IsUsableToolFile(fileName);
             }
             _ = stdoutTask.GetAwaiter().GetResult();
             _ = stderrTask.GetAwaiter().GetResult();
             if (p.ExitCode is 0 or 1 or 2)
                 return true;
             // Some CLIs return non-zero for -h/-version but are still runnable.
-            return File.Exists(fileName);
+            return IsUsableToolFile(fileName);
         }
         catch
         {
             try
             {
                 var path = ResolveToolPath(toolName);
-                return path.Contains(Path.DirectorySeparatorChar) && File.Exists(path);
+                return path.Contains(Path.DirectorySeparatorChar) && IsUsableToolFile(path);
             }
             catch
             {
                 return false;
             }
+        }
+    }
+
+    /// <summary>Reject circular/dangling symlinks that claim to exist but cannot execute.</summary>
+    private static bool IsUsableToolFile(string path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            var fi = new FileInfo(path);
+            if (!fi.Exists)
+                return false;
+
+            // Self-referential symlink: wafw00f -> wafw00f
+            if (!string.IsNullOrEmpty(fi.LinkTarget))
+            {
+                var link = fi.LinkTarget;
+                if (string.Equals(link, fi.Name, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                var dest = Path.IsPathRooted(link)
+                    ? Path.GetFullPath(link)
+                    : Path.GetFullPath(Path.Combine(fi.DirectoryName ?? ".", link));
+                if (string.Equals(dest, fi.FullName, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            // Ensure the OS can open the path (catches circular symlink loops).
+            using var _ = File.OpenRead(path);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -155,6 +189,13 @@ public static class ExternalToolRunner
         {
             var existing = psi.Environment.TryGetValue("PYTHONPATH", out var py) ? py : Environment.GetEnvironmentVariable("PYTHONPATH");
             psi.Environment["PYTHONPATH"] = string.IsNullOrWhiteSpace(existing) ? pylib : pylib + Path.PathSeparator + existing;
+        }
+
+        var gems = Path.GetFullPath(Path.Combine(dir, "..", "gems"));
+        if (Directory.Exists(gems))
+        {
+            psi.Environment["GEM_HOME"] = gems;
+            psi.Environment["GEM_PATH"] = gems;
         }
 
         var templates = Environment.GetEnvironmentVariable("NUCLEI_TEMPLATES_PATH");
@@ -312,12 +353,14 @@ public static class ExternalToolRunner
         if (!Directory.Exists(http))
             return $" -t {Quote(root)}";
 
+        // Deep omits http/vulnerabilities + exposures here — exposures run in TryNucleiExposuresAsync
+        // and the full vuln pack routinely exceeds portal MaxDuration on max-detection scans.
         string[] subs = exposureMode
             ? ["exposures", "misconfiguration"]
             : options.Profile switch
             {
                 "quick" => ["cves"],
-                "deep" => ["cves", "misconfiguration", "vulnerabilities", "default-logins", "exposures"],
+                "deep" => ["cves", "misconfiguration", "default-logins"],
                 _ => ["cves", "misconfiguration"],
             };
 
@@ -357,6 +400,8 @@ public static class ExternalToolRunner
             var stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);
             var stderr = await process.StandardError.ReadToEndAsync(cts.Token);
             await process.WaitForExitAsync(cts.Token);
+            stdout = StripAnsi(stdout);
+            stderr = StripAnsi(stderr);
             return new ToolRunResult(true, "dnsx", process.ExitCode, stdout, stderr, Truncate(stdout, 800));
         }
         catch (Exception ex)
@@ -367,8 +412,55 @@ public static class ExternalToolRunner
 
     public static async Task<ToolRunResult?> TryWafw00fAsync(string targetUrl, CancellationToken ct)
     {
-        if (!IsAvailable("wafw00f")) return null;
-        return await RunAsync("wafw00f", $"-a {Quote(targetUrl)}", TimeSpan.FromSeconds(40), ct);
+        if (IsAvailable("wafw00f"))
+            return await RunAsync("wafw00f", $"-a {Quote(targetUrl)}", TimeSpan.FromSeconds(40), ct);
+
+        // Fallback when wrapper symlink is broken but the Python module is on PYTHONPATH / pylib.
+        try
+        {
+            var pylib = ToolsDirectory is null
+                ? null
+                : Path.GetFullPath(Path.Combine(ToolsDirectory, "..", "pylib"));
+            var psi = new ProcessStartInfo
+            {
+                FileName = "python3",
+                Arguments = $"-c \"import sys; from wafw00f.main import main; sys.argv=['wafw00f','-a',sys.argv[1]]; raise SystemExit(main())\" {Quote(targetUrl)}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (!string.IsNullOrWhiteSpace(pylib) && Directory.Exists(pylib))
+            {
+                var existing = Environment.GetEnvironmentVariable("PYTHONPATH");
+                psi.Environment["PYTHONPATH"] = string.IsNullOrWhiteSpace(existing)
+                    ? pylib
+                    : pylib + Path.PathSeparator + existing;
+            }
+
+            // Prefer console script shipped next to the package when present.
+            var script = pylib is null ? null : Path.Combine(pylib, "bin", "wafw00f");
+            if (!string.IsNullOrWhiteSpace(script) && File.Exists(script))
+            {
+                psi.FileName = script;
+                psi.Arguments = $"-a {Quote(targetUrl)}";
+            }
+
+            using var process = Process.Start(psi);
+            if (process is null) return null;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(40));
+            var stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderr = await process.StandardError.ReadToEndAsync(cts.Token);
+            await process.WaitForExitAsync(cts.Token);
+            if (string.IsNullOrWhiteSpace(stdout + stderr))
+                return null;
+            return new ToolRunResult(true, "wafw00f", process.ExitCode, stdout, stderr, Truncate(stdout + stderr, 800));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static async Task<ToolRunResult?> TryWhatWebAsync(string targetUrl, CancellationToken ct)
@@ -378,28 +470,70 @@ public static class ExternalToolRunner
     }
 
     public static async Task<ToolRunResult?> TryFeroxAsync(
-        string targetUrl, CancellationToken ct, FeroxToolOptions? options = null)
+        string targetUrl,
+        CancellationToken ct,
+        FeroxToolOptions? options = null,
+        string? wordlistPath = null)
     {
         if (!IsAvailable("feroxbuster")) return null;
         options ??= FeroxToolOptions.CreateDefault();
         options.Normalize();
-        var wordlist = FindWordlist();
+        var wordlist = !string.IsNullOrWhiteSpace(wordlistPath) && File.Exists(wordlistPath)
+            ? wordlistPath
+            : FindWordlist();
         var wl = wordlist is null ? "" : $" -w {Quote(wordlist)}";
         var args = $"-u {Quote(targetUrl)} -q -t {options.Threads} -d {options.Depth} --timeout {options.TimeoutSeconds} -n --json{wl}";
         return await RunAsync("feroxbuster", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
     }
 
     public static async Task<ToolRunResult?> TryFfufAsync(
-        string targetUrl, CancellationToken ct, FfufToolOptions? options = null)
+        string targetUrl,
+        CancellationToken ct,
+        FfufToolOptions? options = null,
+        string? wordlistPath = null)
     {
         if (!IsAvailable("ffuf")) return null;
         options ??= FfufToolOptions.CreateDefault();
         options.Normalize();
-        var wordlist = FindWordlist();
+        var wordlist = !string.IsNullOrWhiteSpace(wordlistPath) && File.Exists(wordlistPath)
+            ? wordlistPath
+            : FindWordlist();
         if (wordlist is null) return null;
         var baseUrl = targetUrl.TrimEnd('/') + "/FUZZ";
         var args = $"-u {Quote(baseUrl)} -w {Quote(wordlist)} -mc {options.MatchCodes} -t {options.Threads} -timeout {options.TimeoutSeconds} -s";
         return await RunAsync("ffuf", args, TimeSpan.FromSeconds(options.MaxDurationSeconds), ct);
+    }
+
+    /// <summary>Write a temporary wordlist merging built-in common paths with source-derived paths.</summary>
+    public static string? WriteMergedWordlist(IEnumerable<string> extraPaths)
+    {
+        try
+        {
+            var extras = extraPaths
+                .Select(p => p.Trim().TrimStart('/'))
+                .Where(p => p.Length > 0 && p.Length < 200 && !p.Contains(' ', StringComparison.Ordinal))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(200)
+                .ToList();
+            if (extras.Count == 0) return null;
+
+            var lines = new List<string>();
+            var builtin = FindWordlist();
+            if (builtin is not null)
+            {
+                try { lines.AddRange(File.ReadAllLines(builtin)); }
+                catch { /* ignore */ }
+            }
+
+            lines.AddRange(extras);
+            var path = Path.Combine(Path.GetTempPath(), $"sp-wl-{Guid.NewGuid():N}.txt");
+            File.WriteAllLines(path, lines.Distinct(StringComparer.OrdinalIgnoreCase));
+            return path;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static IReadOnlyList<string> ParseNaabuOpenPorts(string stdout)
@@ -513,4 +647,9 @@ public static class ExternalToolRunner
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…";
+
+    private static readonly Regex AnsiRegex = new(@"\x1B\[[0-9;]*[A-Za-z]", RegexOptions.Compiled);
+
+    public static string StripAnsi(string value) =>
+        string.IsNullOrEmpty(value) ? value : AnsiRegex.Replace(value, string.Empty);
 }
