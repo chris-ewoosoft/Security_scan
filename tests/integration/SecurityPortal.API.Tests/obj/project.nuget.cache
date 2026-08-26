@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "3AxLF44bQrI=",
+  "dgSpecHash": "b1BaHWvupF0=",
   "success": true,
   "projectFilePath": "D:\\Security Portal\\tests\\integration\\SecurityPortal.API.Tests\\SecurityPortal.API.Tests.csproj",
   "expectedPackageFiles": [
@@ -24,6 +24,8 @@
     "C:\\Users\\Chris\\.nuget\\packages\\fluentassertions\\6.12.2\\fluentassertions.6.12.2.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\fluentvalidation\\11.11.0\\fluentvalidation.11.11.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\fluentvalidation.dependencyinjectionextensions\\11.11.0\\fluentvalidation.dependencyinjectionextensions.11.11.0.nupkg.sha512",
+    "C:\\Users\\Chris\\.nuget\\packages\\libgit2sharp\\0.31.0\\libgit2sharp.0.31.0.nupkg.sha512",
+    "C:\\Users\\Chris\\.nuget\\packages\\libgit2sharp.nativebinaries\\2.0.323\\libgit2sharp.nativebinaries.2.0.323.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\masstransit\\8.3.6\\masstransit.8.3.6.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\masstransit.abstractions\\8.3.6\\masstransit.abstractions.8.3.6.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\masstransit.entityframeworkcore\\8.3.6\\masstransit.entityframeworkcore.8.3.6.nupkg.sha512",
@@ -183,6 +185,18 @@
       "warningLevel": 1,
       "filePath": "D:\\Security Portal\\tests\\integration\\SecurityPortal.API.Tests\\SecurityPortal.API.Tests.csproj",
       "libraryId": "OpenTelemetry.Api",
+      "targetGraphs": [
+        "net10.0"
+      ]
+    },
+    {
+      "code": "NU1903",
+      "level": "Warning",
+      "message": "Package 'SSH.NET' 2023.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-q939-rpr3-3284",
+      "projectPath": "D:\\Security Portal\\tests\\integration\\SecurityPortal.API.Tests\\SecurityPortal.API.Tests.csproj",
+      "warningLevel": 1,
+      "filePath": "D:\\Security Portal\\tests\\integration\\SecurityPortal.API.Tests\\SecurityPortal.API.Tests.csproj",
+      "libraryId": "SSH.NET",
       "targetGraphs": [
         "net10.0"
       ]

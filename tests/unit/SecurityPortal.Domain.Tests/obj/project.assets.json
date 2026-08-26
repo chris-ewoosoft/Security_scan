@@ -1247,6 +1247,7 @@
           "FluentAssertions": "6.12.2",
           "FluentValidation": "11.11.0",
           "FluentValidation.DependencyInjectionExtensions": "11.11.0",
+          "LibGit2Sharp": "0.31.0",
           "MailKit": "4.10.0",
           "MassTransit": "8.3.6",
           "MassTransit.EntityFrameworkCore": "8.3.6",
