@@ -144,3 +144,4 @@ D:\Security Portal\tests\unit\SecurityPortal.Application.Tests\obj\Debug\net10.0
 D:\Security Portal\tests\unit\SecurityPortal.Application.Tests\obj\Debug\net10.0\SecurityPortal.Application.Tests.pdb
 D:\Security Portal\tests\unit\SecurityPortal.Application.Tests\obj\Debug\net10.0\SecurityPortal.Application.Tests.genruntimeconfig.cache
 D:\Security Portal\tests\unit\SecurityPortal.Application.Tests\obj\Debug\net10.0\ref\SecurityPortal.Application.Tests.dll
+D:\Security Portal\tests\unit\SecurityPortal.Application.Tests\obj\Debug\net10.0\SecurityPortal.Application.Tests.sourcelink.json

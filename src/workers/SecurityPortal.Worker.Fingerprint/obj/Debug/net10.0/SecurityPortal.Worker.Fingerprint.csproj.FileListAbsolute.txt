@@ -28,3 +28,4 @@ D:\Security Portal\src\workers\SecurityPortal.Worker.Fingerprint\obj\Debug\net10
 D:\Security Portal\src\workers\SecurityPortal.Worker.Fingerprint\obj\Debug\net10.0\SecurityPortal.Worker.Fingerprint.pdb
 D:\Security Portal\src\workers\SecurityPortal.Worker.Fingerprint\obj\Debug\net10.0\SecurityPortal.Worker.Fingerprint.genruntimeconfig.cache
 D:\Security Portal\src\workers\SecurityPortal.Worker.Fingerprint\obj\Debug\net10.0\ref\SecurityPortal.Worker.Fingerprint.dll
+D:\Security Portal\src\workers\SecurityPortal.Worker.Fingerprint\obj\Debug\net10.0\SecurityPortal.Worker.Fingerprint.sourcelink.json

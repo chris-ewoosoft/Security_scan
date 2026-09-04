@@ -28,3 +28,4 @@ D:\Security Portal\src\workers\SecurityPortal.Worker.Discovery\obj\Debug\net10.0
 D:\Security Portal\src\workers\SecurityPortal.Worker.Discovery\obj\Debug\net10.0\SecurityPortal.Worker.Discovery.pdb
 D:\Security Portal\src\workers\SecurityPortal.Worker.Discovery\obj\Debug\net10.0\SecurityPortal.Worker.Discovery.genruntimeconfig.cache
 D:\Security Portal\src\workers\SecurityPortal.Worker.Discovery\obj\Debug\net10.0\ref\SecurityPortal.Worker.Discovery.dll
+D:\Security Portal\src\workers\SecurityPortal.Worker.Discovery\obj\Debug\net10.0\SecurityPortal.Worker.Discovery.sourcelink.json

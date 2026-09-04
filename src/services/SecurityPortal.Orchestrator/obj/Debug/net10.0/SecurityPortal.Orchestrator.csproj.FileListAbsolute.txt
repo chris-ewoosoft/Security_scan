@@ -68,3 +68,4 @@ D:\Security Portal\src\services\SecurityPortal.Orchestrator\obj\Debug\net10.0\re
 D:\Security Portal\src\services\SecurityPortal.Orchestrator\obj\Debug\net10.0\SecurityPortal.Orchestrator.pdb
 D:\Security Portal\src\services\SecurityPortal.Orchestrator\obj\Debug\net10.0\SecurityPortal.Orchestrator.genruntimeconfig.cache
 D:\Security Portal\src\services\SecurityPortal.Orchestrator\obj\Debug\net10.0\ref\SecurityPortal.Orchestrator.dll
+D:\Security Portal\src\services\SecurityPortal.Orchestrator\obj\Debug\net10.0\SecurityPortal.Orchestrator.sourcelink.json

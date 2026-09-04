@@ -73,3 +73,4 @@ D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\refin
 D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\SecurityPortal.Scheduler.pdb
 D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\SecurityPortal.Scheduler.genruntimeconfig.cache
 D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\ref\SecurityPortal.Scheduler.dll
+D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\SecurityPortal.Scheduler.sourcelink.json
