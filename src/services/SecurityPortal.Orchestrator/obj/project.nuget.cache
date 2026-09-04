@@ -1,12 +1,13 @@
 {
   "version": 2,
-  "dgSpecHash": "B3M3WZfLgmc=",
+  "dgSpecHash": "P0ovyDrlplo=",
   "success": true,
   "projectFilePath": "D:\\Security Portal\\src\\services\\SecurityPortal.Orchestrator\\SecurityPortal.Orchestrator.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Chris\\.nuget\\packages\\automapper\\12.0.1\\automapper.12.0.1.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\automapper.extensions.microsoft.dependencyinjection\\12.0.1\\automapper.extensions.microsoft.dependencyinjection.12.0.1.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\bcrypt.net-next\\4.0.3\\bcrypt.net-next.4.0.3.nupkg.sha512",
+    "C:\\Users\\Chris\\.nuget\\packages\\bouncycastle.cryptography\\2.4.0\\bouncycastle.cryptography.2.4.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\communitytoolkit.highperformance\\8.3.0\\communitytoolkit.highperformance.8.3.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\fluentvalidation\\11.11.0\\fluentvalidation.11.11.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\fluentvalidation.dependencyinjectionextensions\\11.11.0\\fluentvalidation.dependencyinjectionextensions.11.11.0.nupkg.sha512",
@@ -78,6 +79,7 @@
     "C:\\Users\\Chris\\.nuget\\packages\\serilog.sinks.console\\6.0.0\\serilog.sinks.console.6.0.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\serilog.sinks.debug\\2.0.0\\serilog.sinks.debug.2.0.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\serilog.sinks.file\\6.0.0\\serilog.sinks.file.6.0.0.nupkg.sha512",
+    "C:\\Users\\Chris\\.nuget\\packages\\ssh.net\\2024.2.0\\ssh.net.2024.2.0.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\stackexchange.redis\\2.8.31\\stackexchange.redis.2.8.31.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\system.diagnostics.eventlog\\9.0.7\\system.diagnostics.eventlog.9.0.7.nupkg.sha512",
     "C:\\Users\\Chris\\.nuget\\packages\\system.identitymodel.tokens.jwt\\8.4.0\\system.identitymodel.tokens.jwt.8.4.0.nupkg.sha512",
@@ -94,6 +96,18 @@
       "warningLevel": 1,
       "filePath": "D:\\Security Portal\\src\\services\\SecurityPortal.Orchestrator\\SecurityPortal.Orchestrator.csproj",
       "libraryId": "AutoMapper",
+      "targetGraphs": [
+        "net10.0"
+      ]
+    },
+    {
+      "code": "NU1903",
+      "level": "Warning",
+      "message": "Package 'SSH.NET' 2024.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-q939-rpr3-3284",
+      "projectPath": "D:\\Security Portal\\src\\services\\SecurityPortal.Orchestrator\\SecurityPortal.Orchestrator.csproj",
+      "warningLevel": 1,
+      "filePath": "D:\\Security Portal\\src\\services\\SecurityPortal.Orchestrator\\SecurityPortal.Orchestrator.csproj",
+      "libraryId": "SSH.NET",
       "targetGraphs": [
         "net10.0"
       ]

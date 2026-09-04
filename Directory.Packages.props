@@ -52,6 +52,8 @@
     <PackageVersion Include="AspNetCore.HealthChecks.UI.Client" Version="9.0.0" />
     <!-- File Storage / MinIO -->
     <PackageVersion Include="Minio" Version="6.0.4" />
+    <!-- SSH (internal server scan) -->
+    <PackageVersion Include="SSH.NET" Version="2024.2.0" />
     <!-- AI -->
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
     <!-- Reports -->

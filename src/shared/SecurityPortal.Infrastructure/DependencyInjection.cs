@@ -30,6 +30,11 @@ public static class DependencyInjection
         services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IWebsiteScanRepository, WebsiteScanRepository>();
+        services.AddScoped<IServerScanRepository, ServerScanRepository>();
+        services.AddScoped<IServerScanExecutor, SshServerScanExecutor>();
+        services.Configure<SshContainmentOptions>(configuration.GetSection("SshContainment"));
+        services.AddScoped<ISshContainmentService, SshContainmentService>();
+        services.AddScoped<IAuditLogService, AuditLogService>();
 
         // Auth services
         services.AddSingleton<IJwtService, JwtService>();

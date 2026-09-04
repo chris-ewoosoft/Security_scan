@@ -143,6 +143,7 @@
             "Serilog.Enrichers.Thread": "4.0.0",
             "Serilog.Sinks.Console": "6.0.0",
             "Serilog.Sinks.File": "6.0.0",
+            "SSH.NET": "2024.2.0",
             "StackExchange.Redis": "2.8.31",
             "Swashbuckle.AspNetCore": "6.9.0",
             "System.IdentityModel.Tokens.Jwt": "8.4.0",
@@ -548,6 +549,7 @@
             "Serilog.Enrichers.Thread": "4.0.0",
             "Serilog.Sinks.Console": "6.0.0",
             "Serilog.Sinks.File": "6.0.0",
+            "SSH.NET": "2024.2.0",
             "StackExchange.Redis": "2.8.31",
             "Swashbuckle.AspNetCore": "6.9.0",
             "System.IdentityModel.Tokens.Jwt": "8.4.0",
@@ -966,6 +968,11 @@
               "version": "[8.5.1, )",
               "versionCentrallyManaged": true
             },
+            "SSH.NET": {
+              "target": "Package",
+              "version": "[2024.2.0, )",
+              "versionCentrallyManaged": true
+            },
             "Serilog": {
               "target": "Package",
               "version": "[4.2.0, )",
@@ -1064,6 +1071,7 @@
             "Serilog.Enrichers.Thread": "4.0.0",
             "Serilog.Sinks.Console": "6.0.0",
             "Serilog.Sinks.File": "6.0.0",
+            "SSH.NET": "2024.2.0",
             "StackExchange.Redis": "2.8.31",
             "Swashbuckle.AspNetCore": "6.9.0",
             "System.IdentityModel.Tokens.Jwt": "8.4.0",

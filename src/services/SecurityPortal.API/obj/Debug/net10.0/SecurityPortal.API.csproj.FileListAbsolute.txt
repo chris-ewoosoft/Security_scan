@@ -201,3 +201,5 @@ D:\Security Portal\src\services\SecurityPortal.API\bin\Debug\net10.0\ru\Microsof
 D:\Security Portal\src\services\SecurityPortal.API\bin\Debug\net10.0\tr\Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.resources.dll
 D:\Security Portal\src\services\SecurityPortal.API\bin\Debug\net10.0\zh-Hans\Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.resources.dll
 D:\Security Portal\src\services\SecurityPortal.API\bin\Debug\net10.0\zh-Hant\Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.resources.dll
+D:\Security Portal\src\services\SecurityPortal.API\bin\Debug\net10.0\BouncyCastle.Cryptography.dll
+D:\Security Portal\src\services\SecurityPortal.API\bin\Debug\net10.0\Renci.SshNet.dll

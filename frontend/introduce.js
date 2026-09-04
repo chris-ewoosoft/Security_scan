@@ -48,8 +48,27 @@ window.SecurityPortalIntroduce = (() => {
           <li><strong>Screenshot</strong> — Gowitness nếu có trên PATH</li>
           <li><strong>Vulnerability Scan</strong> — Nuclei nếu có; không thì placeholder</li>
         </ul>
+        <p class="introduce-check-group-label">Server nội bộ (SSH)</p>
+        <ul>
+          <li><strong>SSH Connectivity</strong> — Kết nối server Linux bằng password hoặc private key</li>
+          <li><strong>Host Triage</strong> — Thu thập thông tin hệ thống và các dấu hiệu cấu hình cần chú ý</li>
+          <li><strong>Server Findings</strong> — Hiển thị trạng thái, summary và findings trong báo cáo bên phải</li>
+        </ul>
       </div>
     </div>
+  </section>
+
+  <section class="introduce-section">
+    <h3>${escapeHtml(t("introduce.sshGoals.title"))}</h3>
+    <p>${escapeHtml(t("introduce.sshGoals.body"))}</p>
+    <ul>
+      <li><strong>Malware &amp; Reverse Shell</strong> — Tìm payload trong thư mục tạm, miner, lệnh tải và thực thi mã, process bất thường hoặc binary đã bị xóa nhưng vẫn chạy.</li>
+      <li><strong>Sniffer &amp; Raw Socket</strong> — Đối chiếu promiscuous mode, raw socket với process capture như <code>tcpdump</code>, <code>tshark</code>, <code>bettercap</code> và các công cụ tương tự.</li>
+      <li><strong>Persistence</strong> — Kiểm tra cron, systemd, shell startup, <code>LD_PRELOAD</code>, SSH key và cơ chế tự khởi động lại.</li>
+      <li><strong>Account Compromise</strong> — Phân tích SSH authentication events, invalid user, login failure và dấu hiệu truy cập bất thường.</li>
+      <li><strong>Data Exfiltration</strong> — Tìm dấu hiệu dump database, đóng gói dữ liệu, upload/copy file và kết nối outbound đáng ngờ.</li>
+      <li><strong>Read-only evidence</strong> — Chỉ thu thập và lưu evidence; không tự động kill process, xóa file, quarantine hoặc block IP.</li>
+    </ul>
   </section>
 
   <section class="introduce-section">
@@ -117,12 +136,21 @@ window.SecurityPortalIntroduce = (() => {
       <li>
         <span class="introduce-step-num">6</span>
         <div>
-          <strong>Đọc Security Report</strong> — Điểm rủi ro, executive summary, bảng findings
-          (kể cả <code>auth.*</code> và <code>source.*</code>). <em>Export Report</em> để xuất PDF.
+          <strong>Quét server nội bộ qua SSH</strong> — Chọn tab <em>Quét server SSH</em> ở cột trái,
+          nhập IP hoặc hostname, port SSH, username và chọn Password hoặc Private Key. Nhấn
+          <em>Bắt đầu scan</em>; kết quả server và findings hiển thị ở cột phải. Có thể nhấn
+          <em>Dừng scan</em> để hủy request đang chạy.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">7</span>
+        <div>
+          <strong>Đọc Security Report</strong> — Điểm rủi ro, executive summary, bảng findings
+          (kể cả <code>auth.*</code>, <code>source.*</code> và findings từ SSH). <em>Export Report</em> để xuất PDF.
+        </div>
+      </li>
+      <li>
+        <span class="introduce-step-num">8</span>
         <div>
           <strong>Xem lịch sử &amp; hướng dẫn</strong> — <em>Chức năng → Lịch sử</em> để mở lại scan cũ;
           <em>Chức năng → Giới thiệu</em> để xem hướng dẫn này.
@@ -196,8 +224,27 @@ window.SecurityPortalIntroduce = (() => {
           <li><strong>Screenshot</strong> — Gowitness if on PATH</li>
           <li><strong>Vulnerability Scan</strong> — Nuclei if available; otherwise placeholder</li>
         </ul>
+        <p class="introduce-check-group-label">Internal server (SSH)</p>
+        <ul>
+          <li><strong>SSH Connectivity</strong> — Connect to Linux servers with a password or private key</li>
+          <li><strong>Host Triage</strong> — Collect system information and configuration signals</li>
+          <li><strong>Server Findings</strong> — Show status, summary and findings in the right report panel</li>
+        </ul>
       </div>
     </div>
+  </section>
+
+  <section class="introduce-section">
+    <h3>${escapeHtml(t("introduce.sshGoals.title"))}</h3>
+    <p>${escapeHtml(t("introduce.sshGoals.body"))}</p>
+    <ul>
+      <li><strong>Malware &amp; Reverse Shell</strong> — Detect payloads in temporary paths, miners, download-and-execute commands, abnormal processes, and deleted binaries still running.</li>
+      <li><strong>Sniffers &amp; Raw Sockets</strong> — Correlate promiscuous mode and raw sockets with capture processes such as <code>tcpdump</code>, <code>tshark</code>, and <code>bettercap</code>.</li>
+      <li><strong>Persistence</strong> — Check cron, systemd, shell startup, <code>LD_PRELOAD</code>, SSH keys, and relaunch mechanisms.</li>
+      <li><strong>Account Compromise</strong> — Analyse SSH authentication events, invalid users, login failures, and unusual access signals.</li>
+      <li><strong>Data Exfiltration</strong> — Look for database dumps, data archiving, upload/copy commands, and suspicious outbound connections.</li>
+      <li><strong>Read-only evidence</strong> — Collect and retain evidence only; never automatically kill processes, delete files, quarantine artifacts, or block IPs.</li>
+    </ul>
   </section>
 
   <section class="introduce-section">
@@ -259,18 +306,26 @@ window.SecurityPortalIntroduce = (() => {
         <span class="introduce-step-num">5</span>
         <div>
           <strong>Start scan</strong> — Click <em>Start scan</em>. The browser stores an access token for view / stop / delete.
-          Status updates in the right column; click <em>Stop scan</em> to cancel.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">6</span>
         <div>
-          <strong>Read the Security Report</strong> — Risk score, executive summary and findings
-          (including <code>auth.*</code> and <code>source.*</code>). Use <em>Export Report</em> for PDF.
+          <strong>Scan an internal server over SSH</strong> — Select <em>SSH server scan</em> in the left column,
+          enter the IP or hostname, SSH port, username, and choose Password or Private Key. Press
+          <em>Start scan</em>; the server result and findings appear in the right column. Press
+          <em>Stop scan</em> to cancel the active request.
         </div>
       </li>
       <li>
         <span class="introduce-step-num">7</span>
+        <div>
+          <strong>Read the Security Report</strong> — Risk score, executive summary and findings
+          (including <code>auth.*</code>, <code>source.*</code> and SSH findings). Use <em>Export Report</em> to export PDF.
+        </div>
+      </li>
+      <li>
+        <span class="introduce-step-num">8</span>
         <div>
           <strong>History &amp; guide</strong> — <em>Functions → History</em> to reopen past scans;
           <em>Functions → Introduce</em> for this guide.

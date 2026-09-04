@@ -19,6 +19,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     // Scans
     public DbSet<WebsiteScan> WebsiteScans => Set<WebsiteScan>();
+    public DbSet<ServerScan> ServerScans => Set<ServerScan>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

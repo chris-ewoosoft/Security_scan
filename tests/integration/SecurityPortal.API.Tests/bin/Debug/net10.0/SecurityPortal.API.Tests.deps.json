@@ -540,6 +540,17 @@
           "lib/net6.0/Bogus.dll": {}
         }
       },
+      "BouncyCastle.Cryptography/2.4.0": {
+        "runtime": {
+          "lib/net6.0/BouncyCastle.Cryptography.dll": {
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.4.0.33771"
+          }
+        },
+        "compile": {
+          "lib/net6.0/BouncyCastle.Cryptography.dll": {}
+        }
+      },
       "Castle.Core/5.1.1": {
         "dependencies": {
           "System.Diagnostics.EventLog": "9.0.7"
@@ -1696,29 +1707,18 @@
           "lib/net6.0/ICSharpCode.SharpZipLib.dll": {}
         }
       },
-      "SSH.NET/2023.0.0": {
+      "SSH.NET/2024.2.0": {
         "dependencies": {
-          "SshNet.Security.Cryptography": "1.3.0"
+          "BouncyCastle.Cryptography": "2.4.0"
         },
         "runtime": {
-          "lib/net7.0/Renci.SshNet.dll": {
-            "assemblyVersion": "2023.0.0.0",
-            "fileVersion": "2023.0.0.0"
+          "lib/net8.0/Renci.SshNet.dll": {
+            "assemblyVersion": "2024.2.0.1",
+            "fileVersion": "2024.2.0.1"
           }
         },
         "compile": {
-          "lib/net7.0/Renci.SshNet.dll": {}
-        }
-      },
-      "SshNet.Security.Cryptography/1.3.0": {
-        "runtime": {
-          "lib/netstandard2.0/SshNet.Security.Cryptography.dll": {
-            "assemblyVersion": "1.3.0.0",
-            "fileVersion": "1.3.0.0"
-          }
-        },
-        "compile": {
-          "lib/netstandard2.0/SshNet.Security.Cryptography.dll": {}
+          "lib/net8.0/Renci.SshNet.dll": {}
         }
       },
       "StackExchange.Redis/2.8.31": {
@@ -1855,7 +1855,7 @@
           "Docker.DotNet": "3.125.15",
           "Docker.DotNet.X509": "3.125.15",
           "Microsoft.Extensions.Logging.Abstractions": "9.0.7",
-          "SSH.NET": "2023.0.0",
+          "SSH.NET": "2024.2.0",
           "SharpZipLib": "1.4.2"
         },
         "runtime": {
@@ -2033,6 +2033,7 @@
           "Minio": "6.0.4",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "9.0.4",
           "Polly": "8.5.1",
+          "SSH.NET": "2024.2.0",
           "SecurityPortal.Application": "1.0.0",
           "SecurityPortal.Domain": "1.0.0",
           "Serilog": "4.2.0",
@@ -4276,6 +4277,13 @@
       "path": "bogus/35.6.1",
       "hashPath": "bogus.35.6.1.nupkg.sha512"
     },
+    "BouncyCastle.Cryptography/2.4.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-SwXsAV3sMvAU/Nn31pbjhWurYSjJ+/giI/0n6tCrYoupEK34iIHCuk3STAd9fx8yudM85KkLSVdn951vTng/vQ==",
+      "path": "bouncycastle.cryptography/2.4.0",
+      "hashPath": "bouncycastle.cryptography.2.4.0.nupkg.sha512"
+    },
     "Castle.Core/5.1.1": {
       "type": "package",
       "serviceable": true,
@@ -4717,19 +4725,12 @@
       "path": "sharpziplib/1.4.2",
       "hashPath": "sharpziplib.1.4.2.nupkg.sha512"
     },
-    "SSH.NET/2023.0.0": {
+    "SSH.NET/2024.2.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-g+3VDUrYhm0sqSxmlQFgRFrmBxhQvVh4pfn4pqjkX7WXE3tTjt1tIsOtjuz3mz/5s8gFFQVRydwCJ7Ohs54sJA==",
-      "path": "ssh.net/2023.0.0",
-      "hashPath": "ssh.net.2023.0.0.nupkg.sha512"
-    },
-    "SshNet.Security.Cryptography/1.3.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-5pBIXRjcSO/amY8WztpmNOhaaCNHY/B6CcYDI7FSTgqSyo/ZUojlLiKcsl+YGbxQuLX439qIkMfP0PHqxqJi/Q==",
-      "path": "sshnet.security.cryptography/1.3.0",
-      "hashPath": "sshnet.security.cryptography.1.3.0.nupkg.sha512"
+      "sha512": "sha512-9r+4UF2P51lTztpd+H7SJywk7WgmlWB//Cm2o96c6uGVZU5r58ys2/cD9pCgTk0zCdSkfflWL1WtqQ9I4IVO9Q==",
+      "path": "ssh.net/2024.2.0",
+      "hashPath": "ssh.net.2024.2.0.nupkg.sha512"
     },
     "StackExchange.Redis/2.8.31": {
       "type": "package",

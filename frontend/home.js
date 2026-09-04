@@ -70,6 +70,9 @@
   const stopScanBtn = document.getElementById("stop-scan-btn");
   const stopScanReportBtn = document.getElementById("stop-scan-report-btn");
   const formError = document.getElementById("form-error");
+  const scanModeTitle = document.getElementById("scan-mode-title");
+  const scanModeButtons = [...document.querySelectorAll("[data-scan-mode]")];
+  const scanModeStoreKey = "sp.scanMode.v1";
   const configSummary = document.getElementById("config-summary");
   const reportPanel = document.getElementById("report-panel");
   const configPanel = document.getElementById("config-panel");
@@ -84,8 +87,11 @@
   const navConfig = document.querySelector('[data-nav="config"]');
   const navHistory = document.querySelector('[data-nav="history"]');
   const navIntroduce = document.querySelector('[data-nav="introduce"]');
+  const navServerScan = document.querySelector('[data-nav="server-scan"]');
   const introducePanel = document.getElementById("introduce-panel");
   const IntroducePanel = window.SecurityPortalIntroduce;
+  const serverScanPanel = document.getElementById("server-scan-panel");
+  const ServerScanPanel = window.SecurityPortalServerScan;
   const authEnabled = document.getElementById("auth-enabled");
   const authFields = document.getElementById("auth-fields");
   const authType = document.getElementById("auth-type");
@@ -99,7 +105,6 @@
   const sourceRepo = document.getElementById("source-repo");
   const sourceBranch = document.getElementById("source-branch");
   const sourceToken = document.getElementById("source-token");
-
   function syncAuthFields() {
     if (!authFields) return;
     authFields.hidden = !authEnabled?.checked;
@@ -168,7 +173,53 @@
   let configMount = null;
   let historyMount = null;
   let introduceMount = null;
+  let serverScanMount = null;
   let rightView = "placeholder"; // placeholder | report | config | history | introduce
+  let scanMode = "website";
+  let startScanController = null;
+
+  function setScanMode(mode) {
+    scanMode = mode === "server" ? "server" : "website";
+    try { localStorage.setItem(scanModeStoreKey, scanMode); } catch { /* ignore */ }
+    const isServer = scanMode === "server";
+    scanModeButtons.forEach((button) => {
+      const active = button.dataset.scanMode === scanMode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    if (scanModeTitle) {
+      scanModeTitle.textContent = isServer ? t("serverScan.title") : t("home.title");
+      scanModeTitle.hidden = false;
+    }
+    if (form) form.hidden = isServer;
+    if (serverScanPanel) serverScanPanel.hidden = !isServer;
+    if (isServer && !serverScanMount && ServerScanPanel) {
+      serverScanMount = ServerScanPanel.mount(serverScanPanel, {
+        onStarted(scan) {
+          activeScanId = "pending";
+          lastScan = scan;
+          renderServerReport(scan);
+          showRight("report");
+        },
+        onProgress(progress) {
+          renderServerProgress(progress);
+        },
+        onResult(scan) {
+          activeScanId = scan.id;
+          lastScan = scan;
+          renderServerReport(scan);
+          showRight("report");
+        },
+        onBusyChange(busy) {
+          serverScanPanel.querySelector("#ss-submit-btn")?.toggleAttribute("disabled", busy);
+        },
+      });
+    }
+  }
+
+  scanModeButtons.forEach((button) => {
+    button.addEventListener("click", () => setScanMode(button.dataset.scanMode));
+  });
 
   document.querySelectorAll("[data-lang]").forEach((btn) => {
     btn.addEventListener("click", () => I18n?.setLocale(btn.getAttribute("data-lang")));
@@ -194,6 +245,15 @@
     const id = (activeScanId && activeScanId !== "pending" ? activeScanId : null)
       || (lastScan?.id && lastScan.id !== "pending" ? lastScan.id : null);
     if (!id) {
+      if (startScanController) {
+        startScanController.abort();
+        startScanController = null;
+        stopPolling();
+        setStopVisible(false);
+        scanBtn.disabled = false;
+        scanBtn.textContent = t("home.scan");
+        return;
+      }
       formError.hidden = false;
       formError.textContent = t("home.stopFailed");
       return;
@@ -208,6 +268,17 @@
       stopScanReportBtn.textContent = t("home.stopping");
     }
 
+    stopPolling();
+    lastScan = {
+      ...(lastScan || {}),
+      id,
+      status: "Cancelled",
+      summary: t("home.stopping"),
+      errorMessage: null,
+      report: null,
+    };
+    renderReport(lastScan);
+
     try {
       const res = await apiFetch(`/scans/${encodeURIComponent(id)}/cancel`, {
         method: "POST",
@@ -218,20 +289,30 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (res.status === 404) {
+          stopPolling();
+          activeScanId = null;
+          lastScan = null;
+          setStopVisible(false);
+          scanBtn.disabled = false;
+          scanBtn.textContent = t("home.scan");
+          formError.hidden = false;
+          formError.textContent = t("home.stopMissing");
+          return;
+        }
         throw new Error(extractError(data) || `${t("home.stopFailed")} (HTTP ${res.status}).`);
       }
 
-      stopPolling();
       activeScanId = data.id || id;
       lastScan = data;
       scanBtn.disabled = false;
       scanBtn.textContent = t("home.scan");
       setStopVisible(false);
-      renderReport(data);
+      renderReport({ ...data, status: data.status || "Cancelled" });
     } catch (err) {
       formError.hidden = false;
       formError.textContent = err.message || t("home.stopFailed");
-      setStopVisible(true);
+      setStopVisible(false);
       if (stopScanBtn) {
         stopScanBtn.disabled = false;
         stopScanBtn.textContent = t("home.stop");
@@ -258,12 +339,13 @@
   }
 
   function setNavActive(view) {
-    const onFunctions = view === "config" || view === "history" || view === "introduce";
+    const onFunctions = view === "config" || view === "history" || view === "introduce" || view === "server-scan";
     navHome?.classList.toggle("is-active", view === "placeholder" || view === "report");
     navFunctions?.classList.toggle("is-active", onFunctions);
     navConfig?.classList.toggle("is-active", view === "config");
     navHistory?.classList.toggle("is-active", view === "history");
     navIntroduce?.classList.toggle("is-active", view === "introduce");
+    navServerScan?.classList.toggle("is-active", view === "server-scan");
     if (!onFunctions) setFunctionsMenuOpen(false);
   }
 
@@ -356,6 +438,9 @@
       }
     } else if (view === "placeholder") {
       history.replaceState(null, "", "/");
+    } else if (view === "server-scan") {
+      setScanMode("server");
+      history.replaceState(null, "", "/?mode=server");
     }
   }
 
@@ -395,6 +480,7 @@
   }
 
   function renderConfigSnapshot() {
+    if (!configSummary) return;
     const config = getScanConfig();
     const summary = ConfigStore.summarize(config, catalog);
     const updated = summary.updatedAt
@@ -433,8 +519,13 @@
     event.preventDefault();
     showRight("introduce");
   });
+  navServerScan?.addEventListener("click", (event) => {
+    event.preventDefault();
+    setScanMode("server");
+    history.replaceState(null, "", "/?mode=server");
+  });
   navHome?.addEventListener("click", (event) => {
-    if (rightView === "config" || rightView === "history") {
+    if (rightView === "config" || rightView === "history" || rightView === "server-scan") {
       event.preventDefault();
       if (lastScan) showRight("report");
       else showRight("placeholder");
@@ -496,8 +587,10 @@
       },
       report: null,
     });
+    setStopVisible(true);
 
     try {
+      startScanController = new AbortController();
       const body = {
         targetUrl,
         checks,
@@ -514,6 +607,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(body),
+        signal: startScanController.signal,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -537,6 +631,10 @@
       const historyNote = document.querySelector(".history-link-note a");
       if (historyNote) historyNote.href = `/?view=history`;
     } catch (err) {
+      if (err.name === "AbortError") {
+        formError.hidden = true;
+        return;
+      }
       formError.hidden = false;
       formError.textContent = err.message || t("home.genericError");
       document.getElementById("status-badge").textContent = "Failed";
@@ -549,6 +647,7 @@
       setStopVisible(false);
       updateScanProgressUi({ status: "Failed" });
     } finally {
+      startScanController = null;
       if (!isScanInProgress(lastScan?.status)) {
         scanBtn.disabled = false;
         scanBtn.textContent = t("home.scan");
@@ -809,7 +908,7 @@
     const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
 
     if (status === "Queued" || status === "pending") {
-      return Math.min(12, 4 + elapsedSec * 1.5);
+      return Math.round(Math.min(12, 4 + elapsedSec * 1.5));
     }
 
     // Running: asymptotic toward 92% until API completes
@@ -880,6 +979,7 @@
   }
 
   function renderReport(scan) {
+    document.getElementById("scan-progress")?.classList.remove("server-scan-progress");
     document.getElementById("report-title").textContent = scan.report?.reportTitle || "Technical Report";
     document.getElementById("report-target").textContent = wrapReportLines(scan.targetUrl || "", 100);
 
@@ -912,7 +1012,8 @@
       document.getElementById("risk-level").className = "";
       document.getElementById("risk-score").textContent = "—/100";
       if (!isScanInProgress(scan.status)) {
-        document.getElementById("executive-summary").textContent = t("report.creating");
+        document.getElementById("executive-summary").textContent =
+          wrapReportLines(scan.errorMessage || scan.summary || t("report.creating"), 120);
       }
       document.getElementById("findings-list").innerHTML =
         `<p class='muted'>${escapeHtml(t("report.findingsPending"))}</p>`;
@@ -958,6 +1059,62 @@
         </tbody>
       </table>
     `;
+  }
+
+  function renderServerReport(scan) {
+    stopProgressTicker();
+    document.getElementById("scan-progress")?.setAttribute("hidden", "");
+    document.getElementById("scan-progress-track")?.setAttribute("hidden", "");
+    document.getElementById("report-title").textContent = t("serverScan.title");
+    document.getElementById("report-target").textContent = `${scan.host}:${scan.port} · ${scan.username}`;
+    const badge = document.getElementById("status-badge");
+    badge.textContent = scan.status || "Completed";
+    badge.className = "badge " + statusClass(scan.status || "Completed");
+    document.getElementById("status-summary").textContent = scan.errorMessage || scan.summary || "—";
+    document.getElementById("metric-http").textContent = "SSH";
+    document.getElementById("metric-time").textContent = "—";
+    document.getElementById("metric-https").textContent = "—";
+    document.getElementById("metric-server").textContent = `${scan.host}:${scan.port}`;
+    document.getElementById("risk-level").textContent = "—";
+    document.getElementById("risk-level").className = "";
+    document.getElementById("risk-score").textContent = "—/100";
+    document.getElementById("executive-summary").textContent = scan.summary || scan.errorMessage || "—";
+    document.getElementById("findings-list").innerHTML = scan.findings?.length
+      ? scan.findings.map((finding) => `
+          <div class="server-scan-finding">
+            <div class="server-scan-finding-head">
+              <strong>${escapeHtml(finding.name || "—")}</strong>
+              <span class="${severityClass(finding.severity)}">${escapeHtml((finding.severity || "").toUpperCase())}</span>
+            </div>
+            <p class="server-scan-finding-meta">${escapeHtml(finding.category || "host-triage")} · ${escapeHtml(finding.confidence || "unknown")}</p>
+            <div class="server-scan-finding-analysis">
+              <strong>${escapeHtml(t("serverScan.analysis"))}</strong>
+              <pre class="server-scan-finding-detail">${escapeHtml(finding.analysis || finding.detail || "—")}</pre>
+            </div>
+            ${String(finding.severity || "").toLowerCase() === "high" ? `
+              <div class="server-scan-finding-recommendation">
+                <strong>${escapeHtml(t("serverScan.recommendation"))}</strong>
+                <p>${escapeHtml(finding.recommendation || t("serverScan.defaultRecommendation"))}</p>
+              </div>` : ""}
+          </div>`).join("")
+      : `<p class="muted">${escapeHtml(t("serverScan.noFindings"))}</p>`;
+    setExportEnabled(false);
+    setStopVisible(false);
+  }
+
+  function renderServerProgress(progress) {
+    const progressEl = document.getElementById("scan-progress");
+    const trackEl = document.getElementById("scan-progress-track");
+    const fillEl = document.getElementById("scan-progress-fill");
+    const labelEl = document.getElementById("scan-progress-label");
+    const pctEl = document.getElementById("scan-progress-pct");
+    if (!progressEl || !trackEl || !fillEl || !labelEl || !pctEl) return;
+    progressEl.hidden = false;
+    trackEl.hidden = false;
+    progressEl.classList.add("server-scan-progress");
+    fillEl.style.width = "45%";
+    pctEl.textContent = `${progress.elapsedSeconds}s`;
+    labelEl.textContent = t(progress.phase);
   }
 
   function stopPolling() {
@@ -1019,15 +1176,24 @@
   const params = new URLSearchParams(window.location.search);
   const initialId = params.get("id");
   const initialView = params.get("view");
+  let initialMode = params.get("mode");
+  if (!initialMode) {
+    try { initialMode = localStorage.getItem(scanModeStoreKey); } catch { /* ignore */ }
+  }
 
   loadCatalog().then(async () => {
     refreshApiBuildStamp();
     if (initialView === "config") showRight("config");
     else if (initialView === "history") showRight("history");
     else if (initialView === "introduce") showRight("introduce");
-    else if (initialId) await showReport(initialId);
+    else if (initialView === "server-scan" || initialMode === "server") {
+      setScanMode("server");
+      if (initialView === "server-scan") history.replaceState(null, "", "/?mode=server");
+      showRight("placeholder");
+    }
     else showRight("placeholder");
   });
 
-  input.focus();
+  setScanMode(initialMode === "server" || initialView === "server-scan" ? "server" : "website");
+  if (initialMode !== "server" && initialView !== "server-scan") input.focus();
 })();

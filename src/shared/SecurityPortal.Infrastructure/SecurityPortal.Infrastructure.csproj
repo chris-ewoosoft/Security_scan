@@ -30,6 +30,7 @@
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Minio" />
+    <PackageReference Include="SSH.NET" />
     <PackageReference Include="Polly" />
   </ItemGroup>
 </Project>

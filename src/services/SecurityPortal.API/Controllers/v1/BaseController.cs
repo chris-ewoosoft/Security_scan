@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using Asp.Versioning;
 using MediatR;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace SecurityPortal.API.Controllers.v1;
@@ -9,7 +8,6 @@ namespace SecurityPortal.API.Controllers.v1;
 [ApiController]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/[controller]")]
-[Authorize]
 [Produces("application/json")]
 public abstract class BaseController(IMediator mediator) : ControllerBase
 {

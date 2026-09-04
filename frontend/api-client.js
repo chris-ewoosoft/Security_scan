@@ -1,6 +1,9 @@
 window.SecurityPortalApi = (() => {
-  const candidates = ["/api/v1", "http://localhost:5000/api/v1"];
+  const candidates = window.location.port === "3000"
+    ? ["http://localhost:5000/api/v1", "/api/v1"]
+    : ["/api/v1", "http://localhost:5000/api/v1"];
   const TOKEN_STORE_KEY = "sp.scanAccess.v1";
+  const AUTH_STORE_KEY = "sp.auth.v1";
 
   function currentLang() {
     return window.SecurityPortalI18n?.getLocale?.() || "vi";
@@ -48,20 +51,98 @@ window.SecurityPortalApi = (() => {
     saveTokenMap(map);
   }
 
+  function loadAuth() {
+    try {
+      const raw = localStorage.getItem(AUTH_STORE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveAuth(auth) {
+    try {
+      if (auth) localStorage.setItem(AUTH_STORE_KEY, JSON.stringify(auth));
+      else localStorage.removeItem(AUTH_STORE_KEY);
+    } catch { /* ignore */ }
+  }
+
+  function authHeaders(headers) {
+    const auth = loadAuth();
+    if (auth?.accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${auth.accessToken}`);
+    }
+  }
+
+  async function authenticate(email, password) {
+    const res = await apiFetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ email, password }),
+      skipAuth: true,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(extractError(data) || `Login failed (HTTP ${res.status}).`);
+    saveAuth(data);
+    return data;
+  }
+
+  async function refreshAuth() {
+    const auth = loadAuth();
+    if (!auth?.refreshToken) return false;
+    const res = await apiFetch("/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ refreshToken: auth.refreshToken }),
+      skipAuth: true,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      saveAuth(null);
+      return false;
+    }
+    saveAuth(data);
+    return true;
+  }
+
+  async function logout() {
+    const auth = loadAuth();
+    saveAuth(null);
+    if (!auth?.refreshToken) return;
+    await apiFetch("/auth/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ refreshToken: auth.refreshToken }),
+      skipAuth: true,
+    }).catch(() => {});
+  }
+
   async function apiFetch(path, options = {}) {
     let lastError = null;
     const headers = new Headers(options.headers || {});
     if (!headers.has("Accept-Language")) {
       headers.set("Accept-Language", currentLang());
     }
+    if (!options.skipAuth) authHeaders(headers);
     const nextOptions = { ...options, headers };
 
     for (const base of candidates) {
       try {
         const res = await fetch(`${base}${path}`, nextOptions);
-        if (res.status === 502 || res.status === 503 || res.status === 504) {
+        const contentType = res.headers.get("content-type") || "";
+        const looksLikeApiResponse = contentType.includes("json");
+        // A gateway error, or a non-JSON response (e.g. this candidate has no
+        // reverse proxy for /api and served a static-server error page instead),
+        // means this base isn't actually serving the API — try the next one.
+        if (res.status === 501 || res.status === 502 || res.status === 503 || res.status === 504 || (!res.ok && !looksLikeApiResponse)) {
           lastError = new Error(`API gateway error (${res.status})`);
           continue;
+        }
+        if (res.status === 401 && !options.skipAuth && !options._retried) {
+          const refreshed = await refreshAuth();
+          if (refreshed) return apiFetch(path, { ...options, _retried: true });
         }
         return res;
       } catch (err) {
@@ -154,6 +235,10 @@ window.SecurityPortalApi = (() => {
 
   return {
     apiFetch,
+    authenticate,
+    refreshAuth,
+    logout,
+    getAuth: loadAuth,
     extractError,
     normalizeUrl,
     statusClass,

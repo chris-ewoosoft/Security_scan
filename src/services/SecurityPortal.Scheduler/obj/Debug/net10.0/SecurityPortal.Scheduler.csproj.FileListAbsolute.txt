@@ -74,3 +74,5 @@ D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\Secur
 D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\SecurityPortal.Scheduler.genruntimeconfig.cache
 D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\ref\SecurityPortal.Scheduler.dll
 D:\Security Portal\src\services\SecurityPortal.Scheduler\obj\Debug\net10.0\SecurityPortal.Scheduler.sourcelink.json
+D:\Security Portal\src\services\SecurityPortal.Scheduler\bin\Debug\net10.0\BouncyCastle.Cryptography.dll
+D:\Security Portal\src\services\SecurityPortal.Scheduler\bin\Debug\net10.0\Renci.SshNet.dll

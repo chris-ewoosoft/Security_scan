@@ -8,6 +8,7 @@ using SecurityPortal.API.Services;
 using SecurityPortal.Application;
 using SecurityPortal.Infrastructure;
 using Serilog;
+using SecurityPortal.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,6 +39,8 @@ builder.Services.AddApiVersioning(options =>
 
 // ─── Controllers ─────────────────────────────────────────
 builder.Services.AddControllers();
+builder.Services.AddAuthorization(options => options.AddPolicy("SshContainmentOperators", policy =>
+    policy.RequireRole("Admin", "SecurityEngineer")));
 builder.Services.AddEndpointsApiExplorer();
 
 // ─── Swagger ─────────────────────────────────────────────
@@ -95,6 +98,7 @@ builder.Services.AddHttpClient("WebsiteScanner", client =>
 builder.Services.AddSingleton<SecurityPortal.API.Services.ScanCancellationRegistry>();
 builder.Services.AddSingleton<SecurityPortal.Application.Common.Interfaces.IScanAbortSignal, SecurityPortal.API.Services.ScanAbortSignal>();
 builder.Services.AddHostedService<SecurityPortal.API.Services.WebsiteScanProcessor>();
+builder.Services.AddHostedService<SecurityPortal.API.Services.ServerScanRawOutputCleanupService>();
 
 var buildStamp = Environment.GetEnvironmentVariable("SECURITYPORTAL_BUILD_STAMP") ?? "2026-08-07.2";
 builder.Logging.AddFilter("SecurityPortal.API", LogLevel.Information);
@@ -141,6 +145,34 @@ using (var scope = app.Services.CreateScope())
         CREATE INDEX IF NOT EXISTS ix_website_scans_status ON website_scans (status);
         CREATE INDEX IF NOT EXISTS ix_website_scans_host ON website_scans (normalized_host);
         CREATE INDEX IF NOT EXISTS ix_website_scans_created_at ON website_scans (created_at);
+        """);
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS server_scans (
+            id uuid PRIMARY KEY,
+            host varchar(255) NOT NULL,
+            port int NOT NULL DEFAULT 22,
+            username varchar(255) NOT NULL,
+            auth_type varchar(32) NOT NULL,
+            secret_cipher text NOT NULL,
+            passphrase_cipher text NULL,
+            status varchar(32) NOT NULL,
+            created_by_user_id uuid NULL,
+            organization_id uuid NULL,
+            started_at timestamptz NULL,
+            completed_at timestamptz NULL,
+            error_message varchar(2000) NULL,
+            summary varchar(4000) NULL,
+            findings_json text NULL,
+            raw_output_json text NULL,
+            raw_output_expires_at timestamptz NULL,
+            owner_token_hash varchar(128) NOT NULL,
+            created_at timestamptz NOT NULL,
+            updated_at timestamptz NOT NULL
+        );
+        ALTER TABLE server_scans ADD COLUMN IF NOT EXISTS raw_output_json text NULL;
+        ALTER TABLE server_scans ADD COLUMN IF NOT EXISTS raw_output_expires_at timestamptz NULL;
+        CREATE INDEX IF NOT EXISTS ix_server_scans_status ON server_scans (status);
+        CREATE INDEX IF NOT EXISTS ix_server_scans_created_at ON server_scans (created_at);
         """);
 }
 
