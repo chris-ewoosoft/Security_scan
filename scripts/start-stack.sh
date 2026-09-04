@@ -4,12 +4,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-set -a
-source .env
-set +a
-
-DB_HOST="${DD_DATABASE_HOST:-postgres}"
-DB_PORT="${DD_DATABASE_PORT:-5432}"
+# Read only the DB vars we need instead of sourcing the whole .env (avoids
+# breaking on unrelated/malformed lines such as leftover merge markers).
+DB_HOST=$(grep -E '^DD_DATABASE_HOST=' .env | tail -1 | cut -d= -f2-)
+DB_PORT=$(grep -E '^DD_DATABASE_PORT=' .env | tail -1 | cut -d= -f2-)
+DB_HOST="${DB_HOST:-postgres}"
+DB_PORT="${DB_PORT:-5432}"
 
 if (echo > "/dev/tcp/${DB_HOST}/${DB_PORT}") >/dev/null 2>&1; then
   echo "Postgres tai ${DB_HOST}:${DB_PORT} da san sang -> dung truc tiep, bo qua container postgres."
